@@ -14,26 +14,33 @@ RUN addgroup -g 1000 verify && adduser -D -u 1000 -G verify -h /tmp/verify verif
 
 FROM verify-dependencies AS verify
 COPY . .
-RUN go mod verify && go test -mod=readonly -race -c -o /verify.test . && CGO_ENABLED=0 go build -mod=readonly -o /wzxjdssh-test .
+RUN --mount=type=cache,target=/root/.cache/go-build go mod verify && go test -mod=readonly -race -c -o /verify.test . && CGO_ENABLED=0 go build -mod=readonly -o /wzxjdssh-test .
 RUN chown -R 1000:1000 /src
 ENV HOME=/tmp GOCACHE=/tmp/go-build WZX_TEST_BINARY=/wzxjdssh-test
 USER 1000:1000
 CMD ["sh", "-c", "cp go.mod go.sum /results/; /verify.test -test.v -test.timeout=180s > /results/go-test.log 2>&1; rc=$?; cat /results/go-test.log; printf '%s\\n' \"$rc\" > /results/exit-code; exit \"$rc\""]
 
 FROM source AS builder
-ARG VERSION=1.0.2
-RUN go mod verify && CGO_ENABLED=0 go build -mod=readonly -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /wzxjdssh . && mkdir -m 0700 /empty-data
+ARG VERSION=2.0.0
+RUN --mount=type=cache,target=/root/.cache/go-build go mod verify && CGO_ENABLED=0 go build -mod=readonly -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /wzxjdssh . && mkdir -m 0700 /empty-data
+
+FROM verify-dependencies AS ui-verify
+RUN apk add --no-cache chromium font-noto-cjk nodejs npm && npm install --prefix /opt/browser --registry=https://registry.npmmirror.com playwright-core@1.56.1
+ENV NODE_PATH=/opt/browser/node_modules HOME=/tmp
+USER 1000:1000
 
 FROM scratch AS runtime
-ARG VERSION=1.0.2
-LABEL org.opencontainers.image.title="wzxjdssh" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.description="SSH transport honeypot with delayed authentication and optional banner tarpit"
+ARG VERSION=2.0.0
+LABEL org.opencontainers.image.title="wzxjdssh" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.licenses="MIT" org.opencontainers.image.source="https://github.com/EttijBaqaee/wzxjdssh" org.opencontainers.image.description="SSH transport honeypot with delayed authentication, SQLite records and Web UI"
 COPY --from=builder /wzxjdssh /wzxjdssh
 COPY --from=builder --chown=65532:65532 /empty-data /data
+COPY --from=builder --chown=65532:65532 /empty-data /var/lib/wzxjdssh
 COPY configs/wzxjdssh.conf /etc/wzxjdssh/config
+COPY LICENSE THIRD-PARTY-NOTICES.txt /licenses/
 ENV WZXJDSSH_CONFIG=/etc/wzxjdssh/config
 USER 65532:65532
-VOLUME ["/data"]
-EXPOSE 2222/tcp
+VOLUME ["/data", "/var/lib/wzxjdssh"]
+EXPOSE 2222/tcp 2223/tcp
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 CMD ["/wzxjdssh", "-health"]
 ENTRYPOINT ["/wzxjdssh"]

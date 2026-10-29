@@ -4,7 +4,7 @@
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。没有认证成功的入口，不提供 Shell、SFTP 或端口转发。
 
-当前版本：**1.0.2**
+当前开发版本：**2.0.0**
 
 ## 工作原理
 
@@ -26,16 +26,20 @@
 - 通过编排环境参数修改宿主机入口端口和 SSH 版本标识。
 - 支持总连接数、每 IP 并发、每 IP 速率、握手并发及多种超时限制。
 - 严格配置校验；配置重载失败保留旧监听和旧配置。
-- 支持 JSON 统计、日志级别和优雅退出；不保存用户名、密码、公钥正文或交互回答。
+- 内置 SQLite，记录连接状态、来源、时间、时长、客户端标识和认证尝试，默认保留 90 天。
+- 记录用户名、密码、keyboard-interactive 回答，以及客户端提交的公钥正文和 SHA256 指纹；SSH 不传输客户端私钥，公钥探测也不证明持有对应私钥。
+- 内置中文 Web UI：统计概览、最近 30 天趋势、来源/用户名/认证方式排行、连接筛选和详情。
+- Web UI 管理员密码通过编排设置，支持路径前缀及 HTTP/HTTPS 反代。
+- 支持 JSON 统计、日志级别和优雅退出；认证内容保存在数据库中，不写入标准输出日志。
 - 正式镜像基于 scratch，以非 root 用户运行，内置健康检查。
 
 ## Docker 部署
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 先在 1Panel 中构建本仓库的 `Dockerfile`，标签设为 `wzxjdssh:1.0.2`；或导入自行保存的同标签镜像。Dockerfile 的最终阶段为正式运行镜像，测试工具不会进入最终镜像。
+1. 先在 1Panel 中构建本仓库的 `Dockerfile`，标签设为 `wzxjdssh:2.0.0`；或导入自行保存的同标签镜像。Dockerfile 的最终阶段为正式运行镜像，测试工具不会进入最终镜像。
 2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`。
-3. 在编排的环境参数区填写所需参数，留空即可使用默认值。
+3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
 编排使用 `pull_policy: never`，直接使用已构建或导入的本地镜像。
@@ -46,12 +50,20 @@
 | --- | --- | --- |
 | `WZXJDSSH_PORT` | `2222` | 宿主机入口端口；容器内部仍监听 2222 |
 | `WZXJDSSH_SERVER_VERSION` | `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4` | 对外发送的 SSH 版本标识，未设置或留空时使用此默认值 |
+| `WZXJDSSH_WEB_PORT` | `2223` | Web UI 宿主机端口 |
+| `WZXJDSSH_WEB_BIND` | `127.0.0.1` | Web 绑定地址；直接远程访问可设 `0.0.0.0` |
+| `WZXJDSSH_ADMIN_USERNAME` | `admin` | 管理员用户名 |
+| `WZXJDSSH_ADMIN_PASSWORD` | 必填 | 管理员密码，至少 12 字节 |
+| `WZXJDSSH_WEB_BASE_PATH` | 空，使用 `/` | 路径前缀，例如 `/sshpanel` |
+| `WZXJDSSH_WEB_SECURE_COOKIE` | `false` | 通过 HTTPS 访问时设置 `true` |
+| `WZXJDSSH_RETENTION_DAYS` | `90` | 历史记录保留天数，范围 1–36500 |
 
 例如，发布到宿主机 22，并自定义版本标识：
 
 ```dotenv
 WZXJDSSH_PORT=22
 WZXJDSSH_SERVER_VERSION=SSH-2.0-OpenSSH_9.9
+WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 ```
 
 仅修改端口、保留 Debian 标识：
@@ -59,6 +71,7 @@ WZXJDSSH_SERVER_VERSION=SSH-2.0-OpenSSH_9.9
 ```dotenv
 WZXJDSSH_PORT=22
 WZXJDSSH_SERVER_VERSION=
+WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 ```
 
 标识必须是完整的 `SSH-2.0-...` 字符串，可以带发行版注释；不接受换行、控制字符或非 ASCII 字符。这里只改变版本标识，不改变底层 SSH 实现。
@@ -94,7 +107,13 @@ WZXJDSSH_SERVER_VERSION=
 
 ## 数据与运维
 
-`hostkeys:/data` 保存主机密钥。升级时编辑原编排、保留同一个项目名和数据卷；新建编排通常会生成另一个卷。自定义目录挂载需允许 UID/GID `65532:65532` 读写。
+`hostkeys:/data` 保存主机密钥，`records:/var/lib/wzxjdssh` 保存 SQLite 数据库及其 WAL 文件。升级时编辑原编排、保留同一个项目名和两个数据卷；新建编排通常会生成另一组卷。自定义目录挂载需允许 UID/GID `65532:65532` 读写。
+
+数据库保存对方实际提交的认证内容，请限制管理入口和备份的访问权限。只部署一个实例读写同一数据库目录。备份时先停止编排服务，再备份整个 `records` 卷；运行中备份应使用 SQLite Backup API，不能只复制主数据库而遗漏 WAL。
+
+程序启动及每小时清理过期记录。认证按提交时间过期，已结束连接按开始时间过期；仍在线的连接在结束后清理。删除记录会供 SQLite 重用空间，不保证立即缩小文件或擦除外部快照。Web 总览覆盖当前保留数据，趋势显示最近 30 天，日统计按 UTC，详情时间按浏览器本地时区展示。
+
+Web 管理会话有效期 8 小时，退出或容器重启后失效。反代保留路径前缀的 Nginx 示例和升级步骤见 [编排文档](COMPOSE.zh-CN.md)。
 
 | 接口 | 行为 |
 | --- | --- |
@@ -102,7 +121,7 @@ WZXJDSSH_SERVER_VERSION=
 | `SIGUSR1` | 输出 JSON 统计 |
 | `SIGTERM` / `SIGINT` | 关闭监听、取消等待并退出 |
 | `-check` | 校验配置与版本标识环境参数 |
-| `-health` | 检查配置的监听入口 |
+| `-health` | Web 启用时检查就绪接口与数据库，不生成 SSH 访问记录；关闭 Web 时检查 SSH 监听 |
 | `-V` | 输出程序版本 |
 
 已接入连接保留自己的协议模式、超时和认证上限；`Delay` 与 banner 行长可动态更新。通过编排修改端口或环境变量时应重新部署容器。

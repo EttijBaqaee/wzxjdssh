@@ -216,6 +216,7 @@ func TestOpenSSHClientCompatibility(t *testing.T){
 func TestHealthProbe(t *testing.T){for _,mode:=range []string{"ssh","banner"}{c:=testConfig(t);c.Mode=mode;startTest(t,c);if err:=health(c);err!=nil {t.Fatalf("%s health: %v",mode,err)}}}
 
 func TestProcessSignalsAndCLI(t *testing.T){
+	t.Setenv("WZXJDSSH_WEB_ENABLED","false");t.Setenv("WZXJDSSH_DATABASE_PATH",filepath.Join(t.TempDir(),"records.sqlite"))
 	dir:=t.TempDir();binary:=os.Getenv("WZX_TEST_BINARY")
 	if binary=="" {binary=filepath.Join(dir,"wzxjdssh");if out,err:=exec.Command("go","build","-o",binary,".").CombinedOutput();err!=nil {t.Fatalf("process fixture build: %v %s",err,out)}}
 	missing:=exec.Command(binary,"-f",filepath.Join(dir,"absent"),"-check");if err:=missing.Run();err==nil {t.Fatal("CLI accepted missing config")}
@@ -252,6 +253,7 @@ func TestProcessEnvironmentServerVersion(t *testing.T){
 		{"environment_overrides_config","SSH-2.0-Environment_2","SSH-2.0-Configured_1","SSH-2.0-Environment_2"},
 	}{t.Run(tc.name,func(t *testing.T){
 		c:=testConfig(t);path:=filepath.Join(t.TempDir(),"config")
+		t.Setenv("WZXJDSSH_WEB_ENABLED","false");t.Setenv("WZXJDSSH_DATABASE_PATH",filepath.Join(t.TempDir(),"records.sqlite"))
 		text:=fmt.Sprintf("Port %d\nBindFamily 4\nBindAddress 127.0.0.1\nHostKeyDirectory %s\nLogLevel 1\n",c.Port,suiteKeyDirectory)
 		if tc.fileVersion!="" {text+="ServerVersion "+tc.fileVersion+"\n"}
 		if err:=os.WriteFile(path,[]byte(text),0600);err!=nil {t.Fatal(err)}

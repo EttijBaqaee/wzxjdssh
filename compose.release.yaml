@@ -1,21 +1,28 @@
 services:
   wzxjdssh:
-    image: wzxjdssh:1.0.2
+    image: wzxjdssh:2.0.0
     pull_policy: never
     container_name: wzxjdssh
     restart: unless-stopped
     ports:
       - "${WZXJDSSH_PORT:-2222}:2222"
+      - "${WZXJDSSH_WEB_BIND:-127.0.0.1}:${WZXJDSSH_WEB_PORT:-2223}:2223"
     environment:
       WZXJDSSH_SERVER_VERSION: "${WZXJDSSH_SERVER_VERSION:-SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4}"
+      WZXJDSSH_RETENTION_DAYS: "${WZXJDSSH_RETENTION_DAYS:-90}"
+      WZXJDSSH_ADMIN_USERNAME: "${WZXJDSSH_ADMIN_USERNAME:-admin}"
+      WZXJDSSH_ADMIN_PASSWORD: "${WZXJDSSH_ADMIN_PASSWORD:?请在编排环境参数中设置至少12位管理员密码}"
+      WZXJDSSH_WEB_BASE_PATH: "${WZXJDSSH_WEB_BASE_PATH:-}"
+      WZXJDSSH_WEB_SECURE_COOKIE: "${WZXJDSSH_WEB_SECURE_COOKIE:-false}"
     volumes:
       - hostkeys:/data
+      - records:/var/lib/wzxjdssh
     read_only: true
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
-    mem_limit: 256m
+    mem_limit: 512m
     cpus: 1
     pids_limit: 256
     ulimits:
@@ -30,3 +37,4 @@ services:
 
 volumes:
   hostkeys:
+  records:

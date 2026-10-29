@@ -1,10 +1,10 @@
-# wzxjdssh 2.0.0： 编排使用文档
+# wzxjdssh 2.0.1： 编排使用文档
 
-配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.0`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
+配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.1`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
 
 创建编排、粘贴配套 YAML，首次部署会从 GHCR 拉取镜像。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
 
-离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.0.0`、`pull_policy` 改为 `never`。
+离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.0.1`、`pull_policy` 改为 `never`。
 
 ## 端口映射
 
@@ -121,7 +121,7 @@ environment:
 
 | 字段 | 当前值 | 用途 |
 | --- | --- | --- |
-| image | ghcr.io/ettijbaqaee/wzxjdssh:2.0.0 | 固定 GHCR 镜像版本 |
+| image | ghcr.io/ettijbaqaee/wzxjdssh:2.0.1 | 固定 GHCR 镜像版本 |
 | pull_policy | missing | 本地没有镜像时从 GHCR 拉取 |
 | container_name | wzxjdssh | 固定容器名；同一宿主机部署多份时需分别命名或移除此字段 |
 | restart | unless-stopped | 自动恢复容器；手动停止后保持停止 |
@@ -176,7 +176,11 @@ volumes:
 
 客户端可以主动中止连接。固定的连接或认证总超时不会被服务端延迟、认证提示或 KeepAlive 延长，例如 ssh2 1.16.0 的 `readyTimeout` 默认 20 秒，认证成功前持续计时。
 
-若对端在认证延迟期间主动断开，服务记录“认证中断（可能超时）”，按来源 IP 与完整客户端 SSH 标识建立 1 小时冷却标记。服务端无法得知客户端本地的确切退出原因，因此手动取消也可能触发此标记。冷却期间再次匹配并提交认证时，返回认证成功后立即关闭连接，不开放会话、命令或转发通道；密码、交互回答或公钥继续记录，公钥认证仍需客户端完成协议要求的签名。
+若对端在认证延迟期间主动断开，服务记录“认证中断（可能超时）”，按来源 IP 与完整客户端 SSH 标识建立 1 小时冷却标记。服务端无法得知客户端本地的确切退出原因，因此手动取消也可能触发此标记。冷却期间再次匹配并提交认证时，先返回认证成功，再对后续 SSH 响应加入随机延迟，模拟网络波动。认证内容继续记录，公钥认证仍需客户端完成协议要求的签名。
+
+仿真阶段以当前 `Delay` 为基准：约 75% 的出站响应延迟 `Delay/20` 至 `Delay/4`，约 25% 停顿 `Delay/2` 至 `Delay×1.5`。默认即 0.5–2.5 秒或 5–15 秒，管理设置展示实际范围；调整 `Delay` 后后续响应使用新范围。延迟基准最小为 20 毫秒。
+
+连接保持到客户端退出、单连接最长持续时间 `MaxConnectionTime` 到期或服务停止，不在仿真登录后立即断开。每连接最多接受一个隔离虚拟会话，接收并丢弃输入；Shell/exec 请求仅进行协议应答，不执行命令、不读取系统文件、不启动进程。SFTP、端口转发和额外会话被拒绝。仿真阶段不再使用认证空闲超时，仍受总连接、每 IP 并发和最长连接时间限制。实际延迟计入实时排行；页面区分“仿真网络迟滞”和“仿真会话结束”。
 
 冷却到期自动恢复正常拖延，期间重连不延长到期时间。标记存于 SQLite，保留 `records` 卷即可跨重启沿用；连接详情显示标记、到期时间与仿真处理结果。历史标签按连接记录保留，过期的活动标记会被清理。
 

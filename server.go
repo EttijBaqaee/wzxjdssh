@@ -310,6 +310,7 @@ type clientConn struct {
 	authStage       atomic.Bool
 	bytesSent       atomic.Uint64
 	readDeadlineMu  sync.Mutex
+	writeMu         sync.Mutex
 	delaying        bool
 	recordID        int64
 	bytesReceived   atomic.Uint64
@@ -332,7 +333,7 @@ func (c *clientConn) releasePending() {
 
 func (c *clientConn) Read(p []byte) (int, error) {
 	c.readDeadlineMu.Lock()
-	if c.authStage.Load() && !c.delaying {
+	if c.authStage.Load() && !c.delaying && !c.simulated.Load() {
 		_ = c.Conn.SetReadDeadline(time.Now().Add(c.cfg.IdleTimeout))
 	}
 	c.readDeadlineMu.Unlock()
@@ -376,6 +377,13 @@ func writeAll(w io.Writer, p []byte) (int, error) {
 }
 
 func (c *clientConn) Write(p []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.simulated.Load() {
+		if err := c.networkPause(); err != nil {
+			return 0, err
+		}
+	}
 	if err := c.Conn.SetWriteDeadline(time.Now().Add(c.cfg.WriteTimeout)); err != nil {
 		return 0, err
 	}
@@ -410,7 +418,7 @@ func (s *Server) handle(c *clientConn) {
 		if stopping {
 			status = "interrupted"
 			reason = "shutdown"
-		} else if c.cfg.Mode == "ssh" && c.attemptCount > 0 {
+		} else if c.cfg.Mode == "ssh" && c.attemptCount > 0 && !c.simulated.Load() {
 			if status == "closed" {
 				status = "auth_rejected"
 				reason = "authentication_failed"
@@ -422,8 +430,9 @@ func (s *Server) handle(c *clientConn) {
 			}
 		}
 		if !stopping && c.simulated.Load() {
-			status = "simulated_disconnect"
-			reason = "marked_client_return"
+			if status == "closed" {
+				status = "simulated_closed"
+			}
 		} else if !stopping && c.peerDuringDelay.Load() && c.markedUntil == 0 {
 			status = "auth_interrupted"
 			reason = "peer_closed_during_auth_delay"
@@ -587,22 +596,26 @@ func (s *Server) handle(c *clientConn) {
 			return
 		}
 		s.stats.authAttempts.Add(1)
-		s.log(1, "authentication", map[string]any{"peer": c.RemoteAddr().String(), "method": method, "accepted": false})
+		s.log(1, "authentication", map[string]any{"peer": c.RemoteAddr().String(), "method": method, "accepted": err == nil})
 	}
 	conn, chans, requests, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
 		s.log(2, "ssh_closed", map[string]any{"peer": c.RemoteAddr().String(), "reason": err.Error()})
 		return
 	}
-	// Marked clients see USERAUTH_SUCCESS, then the transport closes immediately.
-	// No session, command, forwarding or other SSH channel is served.
+	// USERAUTH_SUCCESS is already on the wire. Subsequent packets simulate a
+	// variable slow link; the virtual channel never starts a system process.
+	c.readDeadlineMu.Lock()
 	c.simulated.Store(true)
-	_ = conn.Close()
+	_ = c.Conn.SetReadDeadline(time.Time{})
+	c.readDeadlineMu.Unlock()
 	if s.store != nil {
-		s.storageError(s.store.RecordSimulatedDisconnect(c.recordID, c.markedUntil))
+		if err := s.store.RecordSimulatedSession(c.recordID, c.markedUntil); err != nil {
+			s.storageError(err)
+			c.cancel()
+		}
 	}
-	_ = chans
-	_ = requests
+	s.serveSimulatedNetwork(c, conn, chans, requests)
 }
 
 func randomLine(max int) ([]byte, error) {
@@ -659,6 +672,8 @@ func (s *Server) Snapshot() map[string]any {
 	cfg := s.cfg.Load()
 	live := s.liveSnapshotLocked(time.Now())
 	strategy := map[string]any{"mode": cfg.Mode, "delay_ms": cfg.Delay.Milliseconds(), "client_cooldown_ms": clientCooldown.Milliseconds(), "max_line_length": cfg.MaxLineLength, "max_auth_tries": cfg.MaxAuthTries, "handshake_timeout_ms": cfg.HandshakeTimeout.Milliseconds(), "idle_timeout_ms": cfg.IdleTimeout.Milliseconds(), "max_connection_time_ms": cfg.MaxConnectionTime.Milliseconds(), "max_clients": cfg.MaxClients, "max_clients_per_ip": cfg.MaxClientsPerIP, "connections_per_minute": cfg.ConnectionsPerMinute, "max_pending_handshakes": cfg.MaxPendingHandshakes}
+	strategy["cooldown_return_mode"] = "network_jitter"
+	strategy["network_jitter"] = networkDelayPolicy(cfg.Delay)
 	return map[string]any{"accepted": s.stats.accepted.Load(), "rejected": s.stats.rejected.Load(), "accept_errors": s.stats.acceptErrors.Load(), "closed": s.stats.closed.Load(), "active": s.stats.active.Load(), "pending_handshakes": s.stats.pending.Load(), "bytes_sent": s.stats.bytesSent.Load(), "auth_attempts": s.stats.authAttempts.Load(), "connection_seconds": float64(nanos) / float64(time.Second), "storage_errors": s.storageErrors.Load(), "strategy": strategy, "live": live}
 }
 

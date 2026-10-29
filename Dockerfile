@@ -21,7 +21,7 @@ USER 1000:1000
 CMD ["sh", "-c", "cp go.mod go.sum /results/; /verify.test -test.v -test.timeout=180s > /results/go-test.log 2>&1; rc=$?; cat /results/go-test.log; printf '%s\\n' \"$rc\" > /results/exit-code; exit \"$rc\""]
 
 FROM source AS builder
-ARG VERSION=2.0.0
+ARG VERSION=2.0.1
 RUN --mount=type=cache,target=/root/.cache/go-build go mod verify && CGO_ENABLED=0 go build -mod=readonly -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /wzxjdssh . && mkdir -m 0700 /empty-data
 
 FROM verify-dependencies AS ui-verify
@@ -30,7 +30,7 @@ ENV NODE_PATH=/opt/browser/node_modules HOME=/tmp
 USER 1000:1000
 
 FROM scratch AS runtime
-ARG VERSION=2.0.0
+ARG VERSION=2.0.1
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.revision="${VCS_REF}"
 LABEL org.opencontainers.image.title="wzxjdssh" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.licenses="MIT" org.opencontainers.image.source="https://github.com/EttijBaqaee/wzxjdssh" org.opencontainers.image.description="SSH transport honeypot with delayed authentication, SQLite records and Web UI"

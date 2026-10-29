@@ -39,13 +39,16 @@ func (s *Store) MarkReturningClient(id, until int64) error {
 	return err
 }
 
-func (s *Store) RecordSimulatedDisconnect(id, until int64) error {
+func (s *Store) RecordSimulatedSession(id, until int64) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT OR REPLACE INTO connection_marks(connection_id,label,expires_at) VALUES(?,'simulated_success',?)`, id, until); err != nil {
+	if _, err = tx.Exec(`INSERT OR REPLACE INTO connection_marks(connection_id,label,expires_at) VALUES(?,'simulated_network',?)`, id, until); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`UPDATE connections SET status='simulated_network' WHERE id=? AND ended_at IS NULL`, id); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`UPDATE auth_attempts SET result='simulated_success' WHERE connection_id=? AND result='pending'`, id); err != nil {

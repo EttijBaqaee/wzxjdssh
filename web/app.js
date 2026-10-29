@@ -2,7 +2,7 @@
 const $=id=>document.getElementById(id);
 const state={page:1,total:0,limit:25,view:'overview',loggedIn:false,busy:false,pending:false,autoUpdate:true,lastActivity:Date.now(),lastSignal:0,activityPending:false,idleTimeout:3600000};
 let activityTimer=0;
-const statusNames={connected:'已连接',authenticating:'认证中',auth_rejected:'认证拒绝',closed:'已关闭',handshake_failed:'握手未完成',rejected:'接入拒绝',timeout:'连接超时',interrupted:'中断',auth_interrupted:'认证中断',simulated_disconnect:'仿真成功后断开'};
+const statusNames={connected:'已连接',authenticating:'认证中',auth_rejected:'认证拒绝',closed:'已关闭',handshake_failed:'握手未完成',rejected:'接入拒绝',timeout:'连接超时',interrupted:'中断',auth_interrupted:'认证中断',simulated_disconnect:'旧版仿真后断开',simulated_network:'仿真网络迟滞',simulated_closed:'仿真会话结束'};
 const number=v=>new Intl.NumberFormat('zh-CN').format(v??0);
 const date=v=>v?new Date(v).toLocaleString('zh-CN',{hour12:false}):'—';
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
@@ -79,7 +79,8 @@ function renderStrategy(policy){
   const fields=$('strategy-fields');fields.replaceChildren();if(!policy){$('strategy-mode').textContent='暂不可用';return;}
   const banner=policy.mode==='banner';$('strategy-mode').textContent=banner?'慢速横幅':'SSH 认证延迟';
   $('strategy-description').textContent=banner?'首行等待 '+durationLabel(policy.delay_ms)+'，之后以同样间隔发送随机横幅。':'先完成 SSH 握手，接收认证后等待 '+durationLabel(policy.delay_ms)+' 再拒绝认证。';
-  const items=[[banner?'首行 / 行间隔':'每次认证延迟',durationLabel(policy.delay_ms)],banner?['横幅最大行长',number(policy.max_line_length)+' 字节']:['单连接认证上限',number(policy.max_auth_tries)+' 次'],['连接最长持续',durationLabel(policy.max_connection_time_ms)],['握手超时',durationLabel(policy.handshake_timeout_ms)],['认证空闲超时',durationLabel(policy.idle_timeout_ms)],['认证中断标记冷却',durationLabel(policy.client_cooldown_ms)],['冷却期间重连','认证成功后立即断开'],['总连接上限',number(policy.max_clients)],['每 IP 并发上限',policy.max_clients_per_ip?number(policy.max_clients_per_ip):'不限制'],['每 IP 每分钟接入',policy.connections_per_minute?number(policy.connections_per_minute):'不限制']];
+  const items=[[banner?'首行 / 行间隔':'每次认证延迟',durationLabel(policy.delay_ms)],banner?['横幅最大行长',number(policy.max_line_length)+' 字节']:['单连接认证上限',number(policy.max_auth_tries)+' 次'],['连接最长持续',durationLabel(policy.max_connection_time_ms)],['握手超时',durationLabel(policy.handshake_timeout_ms)],['认证空闲超时',durationLabel(policy.idle_timeout_ms)],['认证中断标记冷却',durationLabel(policy.client_cooldown_ms)],['冷却期间重连',policy.cooldown_return_mode==='network_jitter'?'仿真登录后随机迟滞':'认证成功后立即断开'],['总连接上限',number(policy.max_clients)],['每 IP 并发上限',policy.max_clients_per_ip?number(policy.max_clients_per_ip):'不限制'],['每 IP 每分钟接入',policy.connections_per_minute?number(policy.connections_per_minute):'不限制']];
+  if(!banner&&policy.network_jitter){const p=policy.network_jitter;items.push(['仿真响应常规延迟',durationLabel(p.short_min_ms)+' – '+durationLabel(p.short_max_ms)],['仿真响应偶发停顿',durationLabel(p.stall_min_ms)+' – '+durationLabel(p.stall_max_ms)+'（'+number(p.stall_percent)+'%）']);}
   for(const[label,value]of items){const pair=el('div');pair.append(el('dt',label),el('dd',value));fields.append(pair);}
 }
 let resizeTimer=0;addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(state.loggedIn&&state.view==='overview'&&state.daily)chart(state.daily);},100);});
@@ -113,4 +114,4 @@ function renderLive(live){
   });
 }
 
-function clientMark(c){const labels={auth_interrupted:'认证延迟中断（可能超时）',cooldown:'冷却标记',simulated_success:'仿真成功后断开'};return c.client_mark?(labels[c.client_mark]||c.client_mark)+(c.mark_expires_at<Date.now()?' · 已冷却':' · 1 小时冷却'):'—';}
+function clientMark(c){const labels={auth_interrupted:'认证延迟中断（可能超时）',cooldown:'冷却标记',simulated_success:'旧版仿真后断开',simulated_network:'仿真网络迟滞'};return c.client_mark?(labels[c.client_mark]||c.client_mark)+(c.mark_expires_at<Date.now()?' · 已冷却':' · 1 小时冷却'):'—';}

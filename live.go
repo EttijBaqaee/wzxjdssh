@@ -33,10 +33,14 @@ type LiveStats struct {
 // Account for actual server waits, including the unfinished wait at snapshot time.
 // Client think time and SSH key exchange are not counted as imposed delay.
 func (c *clientConn) pause() error {
+	return c.trackPause(func() error { return c.server.pause(c.ctx) })
+}
+
+func (c *clientConn) trackPause(wait func() error) error {
 	c.server.mu.Lock()
 	c.delayStarted = time.Now()
 	c.server.mu.Unlock()
-	err := c.server.pause(c.ctx)
+	err := wait()
 	c.server.mu.Lock()
 	c.delayed += time.Since(c.delayStarted)
 	c.delayStarted = time.Time{}

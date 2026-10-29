@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"io"
 	"net"
 	"path/filepath"
 	"testing"
@@ -31,7 +32,7 @@ func TestClientCooldownExpiresAndPersists(t *testing.T) {
 	if err = store.MarkReturningClient(id, until); err != nil {
 		t.Fatal(err)
 	}
-	if err = store.RecordSimulatedDisconnect(id, until); err != nil {
+	if err = store.RecordSimulatedSession(id, until); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -60,12 +61,12 @@ func TestClientCooldownExpiresAndPersists(t *testing.T) {
 		t.Fatal("expired mark not pruned", got, err)
 	}
 	record, _, err := store.Detail(context.Background(), id)
-	if err != nil || record.ClientMark != "simulated_success" || record.MarkExpiresAt != until {
+	if err != nil || record.ClientMark != "simulated_network" || record.MarkExpiresAt != until {
 		t.Fatal("historical label lost", record, err)
 	}
 }
 
-func TestInterruptedClientGetsSuccessThenDisconnectUntilCooldown(t *testing.T) {
+func TestInterruptedClientGetsSimulatedNetworkUntilCooldown(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Delay = 300 * time.Millisecond
 	store := testStore(t)
@@ -119,24 +120,50 @@ func TestInterruptedClientGetsSuccessThenDisconnectUntilCooldown(t *testing.T) {
 		if time.Since(started) >= cfg.Delay {
 			t.Fatal("marked client unnecessarily delayed")
 		}
-		if session, err := c.NewSession(); err == nil {
-			session.Close()
-			t.Fatal("simulated client opened a session")
+		started = time.Now()
+		session, err := c.NewSession()
+		if err != nil {
+			c.Close()
+			t.Fatal("virtual session was closed immediately", err)
+		}
+		if time.Since(started) < cfg.Delay/20 {
+			t.Fatal("channel confirmation did not simulate network delay")
+		}
+		stdout, err := session.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = session.Start("echo WZXJDSSH-MUST-NOT-EXECUTE"); err != nil {
+			t.Fatal(err)
+		}
+		output := make(chan []byte, 1)
+		go func() { data, _ := io.ReadAll(stdout); output <- data }()
+		select {
+		case data := <-output:
+			t.Fatal("virtual command returned or disconnected", string(data))
+		case <-time.After(100 * time.Millisecond):
+		}
+		active, err := store.List(context.Background(), RecordFilter{Status: "simulated_network"})
+		if err != nil || active.Total != 1 || active.Items[0].EndedAt != nil {
+			t.Fatal("virtual session not shown as active", active, err)
 		}
 		c.Close()
+		if data := <-output; len(data) != 0 {
+			t.Fatal("virtual command produced system output", string(data))
+		}
 		eventually(t, func() bool { return s.stats.active.Load() == 0 })
 		got, err := store.ClientCooldown("127.0.0.1", version, time.Now())
 		if err != nil || got != until {
 			t.Fatal("return visit extended cooldown", got, until, err)
 		}
 	}
-	page, err = store.List(context.Background(), RecordFilter{Status: "simulated_disconnect"})
+	page, err = store.List(context.Background(), RecordFilter{Status: "simulated_closed"})
 	if err != nil || page.Total != 3 {
 		t.Fatal("simulated closes not recorded", page, err)
 	}
 	for _, record := range page.Items {
 		_, attempts, err := store.Detail(context.Background(), record.ID)
-		if err != nil || record.ClientMark != "simulated_success" || len(attempts) == 0 || attempts[0].Result != "simulated_success" {
+		if err != nil || record.ClientMark != "simulated_network" || len(attempts) == 0 || attempts[0].Result != "simulated_success" {
 			t.Fatal(record, attempts, err)
 		}
 	}

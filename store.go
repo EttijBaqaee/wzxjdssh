@@ -131,6 +131,8 @@ func OpenStore(path string) (*Store, error) {
  CREATE INDEX IF NOT EXISTS auth_connection ON auth_attempts(connection_id,id);
  CREATE INDEX IF NOT EXISTS auth_time ON auth_attempts(at);
  CREATE INDEX IF NOT EXISTS auth_username ON auth_attempts(username,connection_id);
+	CREATE TABLE IF NOT EXISTS web_preferences (key TEXT PRIMARY KEY,value INTEGER NOT NULL);
+	INSERT OR IGNORE INTO web_preferences(key,value) VALUES('idle_minutes',60);
 	`
 	if _, err = db.Exec(schema); err != nil {
 		db.Close()
@@ -159,6 +161,24 @@ func OpenStore(path string) (*Store, error) {
 	return s, nil
 }
 func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) WebIdleMinutes() (int, error) {
+	var minutes int
+	err := s.db.QueryRow(`SELECT value FROM web_preferences WHERE key='idle_minutes'`).Scan(&minutes)
+	if err != nil {
+		return 0, err
+	}
+	if minutes < 1 || minutes > 1440 {
+		return 0, errors.New("invalid idle timeout preference")
+	}
+	return minutes, nil
+}
+func (s *Store) SetWebIdleMinutes(ctx context.Context, minutes int) error {
+	if minutes < 1 || minutes > 1440 {
+		return errors.New("idle timeout must be 1..1440 minutes")
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE web_preferences SET value=? WHERE key='idle_minutes'`, minutes)
+	return err
+}
 func (s *Store) Start(peer, ip, mode string, at time.Time) (int64, error) {
 	r, err := s.db.Exec(`INSERT INTO connections(peer,ip,mode,started_at,status) VALUES(?,?,?,?,'connected')`, peer, ip, mode, at.UnixMilli())
 	if err != nil {

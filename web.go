@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,16 +26,18 @@ import (
 var webFiles embed.FS
 
 type Web struct {
-	cfg      RuntimeConfig
-	store    *Store
-	snapshot func() map[string]any
-	secret   [32]byte
-	password [32]byte
-	server   *http.Server
-	errors   chan error
-	mu       sync.Mutex
-	failures map[string]loginFailures
-	sessions map[[32]byte]time.Time
+	cfg        RuntimeConfig
+	store      *Store
+	snapshot   func() map[string]any
+	secret     [32]byte
+	password   [32]byte
+	server     *http.Server
+	errors     chan error
+	mu         sync.Mutex
+	failures   map[string]loginFailures
+	sessions   map[[32]byte]time.Time
+	idleNanos  atomic.Int64
+	settingsMu sync.Mutex
 }
 type loginFailures struct {
 	Count int
@@ -47,6 +50,11 @@ func NewWeb(c RuntimeConfig, s *Store, snapshot func() map[string]any) (*Web, er
 	}
 	w := &Web{cfg: c, store: s, snapshot: snapshot, errors: make(chan error, 1), failures: map[string]loginFailures{}, password: sha256.Sum256([]byte(c.AdminPassword))}
 	w.cfg.AdminPassword = ""
+	minutes, err := s.WebIdleMinutes()
+	if err != nil {
+		return nil, err
+	}
+	w.idleNanos.Store(int64(time.Duration(minutes) * time.Minute))
 	w.sessions = make(map[[32]byte]time.Time)
 	if _, err := rand.Read(w.secret[:]); err != nil {
 		return nil, err
@@ -77,12 +85,13 @@ func (w *Web) Close() {
 func (w *Web) sessionCookie(value string, maxAge int) *http.Cookie {
 	return &http.Cookie{Name: "wzxjdssh_session", Value: value, Path: w.cfg.WebBasePath + "/", HttpOnly: true, Secure: w.cfg.SecureCookie, SameSite: http.SameSiteStrictMode, MaxAge: maxAge}
 }
+func (w *Web) idleTimeout() time.Duration { return time.Duration(w.idleNanos.Load()) }
 func (w *Web) sessionToken() (string, error) {
 	var nonce [24]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return "", err
 	}
-	payload := strconv.FormatInt(time.Now().Add(8*time.Hour).Unix(), 10) + "." + base64.RawURLEncoding.EncodeToString(nonce[:])
+	payload := strconv.FormatInt(time.Now().Unix(), 10) + "." + base64.RawURLEncoding.EncodeToString(nonce[:])
 	m := hmac.New(sha256.New, w.secret[:])
 	m.Write([]byte(payload))
 	token := payload + "." + base64.RawURLEncoding.EncodeToString(m.Sum(nil))
@@ -97,7 +106,7 @@ func (w *Web) sessionToken() (string, error) {
 	if len(w.sessions) >= 4096 {
 		return "", errors.New("too many active sessions")
 	}
-	w.sessions[sha256.Sum256([]byte(token))] = now.Add(8 * time.Hour)
+	w.sessions[sha256.Sum256([]byte(token))] = now.Add(w.idleTimeout())
 	return token, nil
 }
 func (w *Web) authenticated(r *http.Request) bool {
@@ -109,9 +118,9 @@ func (w *Web) authenticated(r *http.Request) bool {
 	if len(parts) != 3 {
 		return false
 	}
-	expiry, err := strconv.ParseInt(parts[0], 10, 64)
+	issued, err := strconv.ParseInt(parts[0], 10, 64)
 	now := time.Now().Unix()
-	if err != nil || expiry <= now || expiry > now+8*3600+60 {
+	if err != nil || issued > now+60 {
 		return false
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
@@ -125,7 +134,12 @@ func (w *Web) authenticated(r *http.Request) bool {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	until, ok := w.sessions[sha256.Sum256([]byte(cookie.Value))]
+	key := sha256.Sum256([]byte(cookie.Value))
+	until, ok := w.sessions[key]
+	if ok && !until.After(time.Now()) {
+		delete(w.sessions, key)
+		return false
+	}
 	return ok && until.After(time.Now())
 }
 func sendJSON(rw http.ResponseWriter, status int, v any) {
@@ -145,6 +159,28 @@ func (w *Web) Handler() http.Handler {
 		sendJSON(rw, 200, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /api/login", w.login)
+	mux.HandleFunc("POST /api/activity", func(rw http.ResponseWriter, r *http.Request) {
+		if !w.authenticated(r) {
+			sendJSON(rw, 401, map[string]string{"error": "请先登录"})
+			return
+		}
+		cookie, _ := r.Cookie("wzxjdssh_session")
+		key := sha256.Sum256([]byte(cookie.Value))
+		now := time.Now()
+		w.mu.Lock()
+		until, ok := w.sessions[key]
+		valid := ok && until.After(now)
+		if valid {
+			w.sessions[key] = now.Add(w.idleTimeout())
+		}
+		w.mu.Unlock()
+		if !valid {
+			sendJSON(rw, 401, map[string]string{"error": "请先登录"})
+			return
+		}
+		http.SetCookie(rw, w.sessionCookie(cookie.Value, int(w.idleTimeout().Seconds())))
+		sendJSON(rw, 200, map[string]bool{"ok": true})
+	})
 	mux.HandleFunc("POST /api/logout", func(rw http.ResponseWriter, r *http.Request) {
 		if !w.authenticated(r) {
 			sendJSON(rw, 401, map[string]string{"error": "请先登录"})
@@ -162,8 +198,10 @@ func (w *Web) Handler() http.Handler {
 			sendJSON(rw, 401, map[string]string{"error": "请先登录"})
 			return
 		}
-		sendJSON(rw, 200, map[string]any{"username": w.cfg.AdminUsername, "retention_days": w.cfg.RetentionDays, "version": version})
+		sendJSON(rw, 200, map[string]any{"username": w.cfg.AdminUsername, "retention_days": w.cfg.RetentionDays, "version": version, "idle_timeout_seconds": int(w.idleTimeout().Seconds())})
 	})
+	mux.HandleFunc("GET /api/settings", w.protected(w.settings))
+	mux.HandleFunc("POST /api/settings", w.protected(w.settings))
 	mux.HandleFunc("GET /api/stats", w.protected(w.stats))
 	mux.HandleFunc("GET /api/connections", w.protected(w.connections))
 	mux.HandleFunc("GET /api/connections/{id}", w.protected(w.detail))
@@ -179,6 +217,11 @@ func (w *Web) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /app.js", func(rw http.ResponseWriter, r *http.Request) {
 		data, _ := fs.ReadFile(files, "app.js")
+		rw.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		rw.Write(data)
+	})
+	mux.HandleFunc("GET /theme.js", func(rw http.ResponseWriter, r *http.Request) {
+		data, _ := fs.ReadFile(files, "theme.js")
 		rw.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		rw.Write(data)
 	})
@@ -203,6 +246,7 @@ func (w *Web) Handler() http.Handler {
 		})
 	}
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("X-Session-Idle-Seconds", strconv.Itoa(int(w.idleTimeout().Seconds())))
 		rw.Header().Set("Cache-Control", "no-store")
 		rw.Header().Set("X-Content-Type-Options", "nosniff")
 		rw.Header().Set("Referrer-Policy", "no-referrer")
@@ -287,7 +331,7 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	w.mu.Lock()
 	delete(w.failures, ip)
 	w.mu.Unlock()
-	http.SetCookie(rw, w.sessionCookie(token, 8*3600))
+	http.SetCookie(rw, w.sessionCookie(token, int(w.idleTimeout().Seconds())))
 	sendJSON(rw, 200, map[string]bool{"ok": true})
 }
 func (w *Web) stats(rw http.ResponseWriter, r *http.Request) {
@@ -301,6 +345,62 @@ func (w *Web) stats(rw http.ResponseWriter, r *http.Request) {
 		live = w.snapshot()
 	}
 	sendJSON(rw, 200, map[string]any{"stored": stats, "runtime": live, "retention_days": w.cfg.RetentionDays, "timezone": "UTC"})
+}
+
+func (w *Web) settings(rw http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+			sendJSON(rw, 415, map[string]string{"error": "需要 JSON 请求"})
+			return
+		}
+		var body struct {
+			Minutes int `json:"idle_timeout_minutes"`
+		}
+		r.Body = http.MaxBytesReader(rw, r.Body, 4096)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil || body.Minutes < 1 || body.Minutes > 1440 {
+			sendJSON(rw, 400, map[string]string{"error": "闲置退出时间须为 1–1440 分钟"})
+			return
+		}
+		w.settingsMu.Lock()
+		defer w.settingsMu.Unlock()
+		if err := w.store.SetWebIdleMinutes(r.Context(), body.Minutes); err != nil {
+			sendJSON(rw, 500, map[string]string{"error": "无法保存管理设置"})
+			return
+		}
+		cookie, _ := r.Cookie("wzxjdssh_session")
+		current := sha256.Sum256([]byte(cookie.Value))
+		now := time.Now()
+		next := time.Duration(body.Minutes) * time.Minute
+		w.mu.Lock()
+		previous := w.idleTimeout()
+		activeUntil, active := w.sessions[current]
+		active = active && activeUntil.After(now)
+		w.idleNanos.Store(int64(next))
+		for key, until := range w.sessions {
+			if !until.After(now) {
+				delete(w.sessions, key)
+				continue
+			}
+			updated := until.Add(-previous).Add(next)
+			if !updated.After(now) {
+				delete(w.sessions, key)
+			} else {
+				w.sessions[key] = updated
+			}
+		}
+		if active {
+			w.sessions[current] = now.Add(next)
+		}
+		w.mu.Unlock()
+		if !active {
+			sendJSON(rw, 401, map[string]string{"error": "请先登录"})
+			return
+		}
+		http.SetCookie(rw, w.sessionCookie(cookie.Value, int(next.Seconds())))
+	}
+	sendJSON(rw, 200, map[string]int{"idle_timeout_minutes": int(w.idleTimeout() / time.Minute), "idle_timeout_seconds": int(w.idleTimeout() / time.Second)})
 }
 func (w *Web) connections(rw http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()

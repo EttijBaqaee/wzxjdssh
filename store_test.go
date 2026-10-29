@@ -244,6 +244,47 @@ func TestSSHUsernameWithoutCredential(t *testing.T) {
 	})
 }
 
+func TestSnapshotShowsLiveDelayStrategy(t *testing.T) {
+	c := testConfig(t)
+	s := startTest(t, c)
+	policy := s.Snapshot()["strategy"].(map[string]any)
+	if policy["mode"] != "ssh" || policy["delay_ms"] != c.Delay.Milliseconds() || policy["max_auth_tries"] != c.MaxAuthTries {
+		t.Fatal("incorrect strategy", policy)
+	}
+	c.Delay = 75 * time.Millisecond
+	c.MaxAuthTries = 3
+	if err := s.Reload(c); err != nil {
+		t.Fatal(err)
+	}
+	policy = s.Snapshot()["strategy"].(map[string]any)
+	if policy["delay_ms"] != int64(75) || policy["max_auth_tries"] != 3 {
+		t.Fatal("strategy did not follow configuration reload", policy)
+	}
+}
+
+func TestStoreWebPreferencesSurviveRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.sqlite")
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SetWebIdleMinutes(context.Background(), 15); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Prune(time.Now(), 90); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store, err = OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if minutes, err := store.WebIdleMinutes(); err != nil || minutes != 15 {
+		t.Fatal("web preference lost", minutes, err)
+	}
+}
+
 func TestStoreSchemaUpgrade(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "records.sqlite")
 	s, err := OpenStore(path)

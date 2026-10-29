@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -67,7 +68,7 @@ func TestWebAuthenticationPrefixAndRecords(t *testing.T) {
 		h.ServeHTTP(rw, r)
 		return rw
 	}
-	for _, path := range []string{"/sshpanel/api/stats", "/sshpanel/api/connections", fmt.Sprint("/sshpanel/api/connections/", id), "/sshpanel/api/session"} {
+	for _, path := range []string{"/sshpanel/api/stats", "/sshpanel/api/connections", fmt.Sprint("/sshpanel/api/connections/", id), "/sshpanel/api/session", "/sshpanel/api/settings"} {
 		if r := call("GET", path, "", nil, ""); r.Code != 401 || strings.Contains(r.Body.String(), "test-secret") {
 			t.Fatal(path, r.Code, r.Body.String())
 		}
@@ -78,7 +79,7 @@ func TestWebAuthenticationPrefixAndRecords(t *testing.T) {
 	if r := call("GET", "/sshpanel", "", nil, ""); r.Code != http.StatusPermanentRedirect || r.Header().Get("Location") != "/sshpanel/" {
 		t.Fatal("prefix redirect", r.Code, r.Header())
 	}
-	for _, path := range []string{"/sshpanel/", "/sshpanel/app.js", "/sshpanel/style.css"} {
+	for _, path := range []string{"/sshpanel/", "/sshpanel/app.js", "/sshpanel/theme.js", "/sshpanel/style.css"} {
 		r := call("GET", path, "", nil, "")
 		if r.Code != 200 || r.Header().Get("Content-Security-Policy") == "" || r.Header().Get("Cache-Control") != "no-store" {
 			t.Fatal(path, r.Code)
@@ -94,7 +95,7 @@ func TestWebAuthenticationPrefixAndRecords(t *testing.T) {
 		t.Fatal("login failed", r.Code, r.Body.String())
 	}
 	cookie := cookies[0]
-	if !cookie.HttpOnly || !cookie.Secure || cookie.Path != "/sshpanel/" || cookie.SameSite != http.SameSiteStrictMode {
+	if !cookie.HttpOnly || !cookie.Secure || cookie.Path != "/sshpanel/" || cookie.SameSite != http.SameSiteStrictMode || cookie.MaxAge != 3600 {
 		t.Fatalf("cookie flags: %+v", cookie)
 	}
 	if r = call("GET", "/sshpanel/api/stats", "", cookie, ""); r.Code != 200 {
@@ -118,6 +119,73 @@ func TestWebAuthenticationPrefixAndRecords(t *testing.T) {
 	}
 	if r = call("GET", "/sshpanel/api/session", "", cookie, ""); r.Code != 401 {
 		t.Fatal("replayed logged-out cookie accepted")
+	}
+}
+
+func TestWebIdleTimeoutIsNotExtendedByPolling(t *testing.T) {
+	w, err := NewWeb(RuntimeConfig{AdminUsername: "admin", AdminPassword: "test-admin-password"}, testStore(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := w.Handler()
+	call := func(method, path, body string, cookie *http.Cookie, origin string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "https://example.test"+path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		if cookie != nil {
+			r.AddCookie(cookie)
+		}
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		rw := httptest.NewRecorder()
+		h.ServeHTTP(rw, r)
+		return rw
+	}
+	response := call("POST", "/api/login", `{"username":"admin","password":"test-admin-password"}`, nil, "")
+	if response.Code != 200 {
+		t.Fatal(response.Code)
+	}
+	cookie := response.Result().Cookies()[0]
+	if cookie.MaxAge != 3600 {
+		t.Fatal("wrong idle cookie lifetime", cookie.MaxAge)
+	}
+	key := sha256.Sum256([]byte(cookie.Value))
+	nearExpiry := time.Now().Add(time.Minute)
+	w.mu.Lock()
+	w.sessions[key] = nearExpiry
+	w.mu.Unlock()
+	for i := 0; i < 3; i++ {
+		if r := call("GET", "/api/stats", "", cookie, ""); r.Code != 200 {
+			t.Fatal(r.Code)
+		}
+	}
+	w.mu.Lock()
+	until := w.sessions[key]
+	w.mu.Unlock()
+	if !until.Equal(nearExpiry) {
+		t.Fatal("automatic polling renewed session")
+	}
+	if r := call("POST", "/api/activity", "", cookie, "https://evil.test"); r.Code != 403 {
+		t.Fatal("cross origin renewal allowed")
+	}
+	response = call("POST", "/api/activity", "", cookie, "https://example.test")
+	if response.Code != 200 || response.Result().Cookies()[0].MaxAge != 3600 {
+		t.Fatal("activity did not renew session")
+	}
+	w.mu.Lock()
+	until = w.sessions[key]
+	w.mu.Unlock()
+	if until.Before(time.Now().Add(59 * time.Minute)) {
+		t.Fatal("activity failed to reset idle deadline")
+	}
+	w.mu.Lock()
+	w.sessions[key] = time.Now().Add(-time.Second)
+	w.mu.Unlock()
+	if r := call("GET", "/api/session", "", cookie, ""); r.Code != 401 {
+		t.Fatal("idle session accepted")
+	}
+	if r := call("POST", "/api/activity", "", cookie, ""); r.Code != 401 {
+		t.Fatal("expired session resurrected")
 	}
 }
 
@@ -149,5 +217,63 @@ func TestWebConcurrentLoginLimit(t *testing.T) {
 	group.Wait()
 	if rejected.Load() != 10 || limited.Load() != 22 {
 		t.Fatal("concurrent limit bypass", rejected.Load(), limited.Load())
+	}
+}
+
+func TestWebIdleSettingsPersistAndApply(t *testing.T) {
+	store := testStore(t)
+	cfg := RuntimeConfig{AdminUsername: "admin", AdminPassword: "test-admin-password"}
+	w, err := NewWeb(cfg, store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := w.Handler()
+	call := func(method, path, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://example.test"+path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		if cookie != nil {
+			r.AddCookie(cookie)
+		}
+		rw := httptest.NewRecorder()
+		h.ServeHTTP(rw, r)
+		return rw
+	}
+	if r := call("POST", "/api/settings", `{"idle_timeout_minutes":30}`, nil); r.Code != 401 {
+		t.Fatal("settings saved anonymously")
+	}
+	response := call("POST", "/api/login", `{"username":"admin","password":"test-admin-password"}`, nil)
+	cookie := response.Result().Cookies()[0]
+	for _, value := range []string{"0", "1441", "1.5", `"30"`} {
+		if r := call("POST", "/api/settings", `{"idle_timeout_minutes":`+value+`}`, cookie); r.Code != 400 {
+			t.Fatal("invalid idle setting accepted", value, r.Code)
+		}
+	}
+	oldToken, err := w.sessionToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey := sha256.Sum256([]byte(oldToken))
+	w.mu.Lock()
+	w.sessions[oldKey] = time.Now().Add(-time.Second)
+	w.mu.Unlock()
+	response = call("POST", "/api/settings", `{"idle_timeout_minutes":30}`, cookie)
+	if response.Code != 200 || response.Result().Cookies()[0].MaxAge != 1800 {
+		t.Fatal("settings not applied", response.Code, response.Body.String())
+	}
+	if minutes, err := store.WebIdleMinutes(); err != nil || minutes != 30 {
+		t.Fatal("setting not saved", minutes, err)
+	}
+	w.mu.Lock()
+	_, resurrected := w.sessions[oldKey]
+	w.mu.Unlock()
+	if resurrected {
+		t.Fatal("expired session resurrected")
+	}
+	again, err := NewWeb(cfg, store, nil)
+	if err != nil || again.idleTimeout() != 30*time.Minute {
+		t.Fatal("stored setting not loaded", err)
+	}
+	if r := call("GET", "/api/settings", "", cookie); r.Code != 200 || !strings.Contains(r.Body.String(), `"idle_timeout_minutes":30`) {
+		t.Fatal("settings not readable", r.Body.String())
 	}
 }

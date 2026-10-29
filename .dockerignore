@@ -1,0 +1,16 @@
+.git
+results
+*.tar
+*.tar.gz
+panel_client.py
+.panel-cookies
+compose*.json
+.env
+.env.*
+!.env.example
+data
+work
+ssh_host_*
+.hostkey-*
+*.zip
+*.b64

@@ -1,0 +1,28 @@
+# Local configuration and runtime data
+.env
+.env.*
+!.env.example
+data/
+results/
+work/
+ssh_host_*
+.hostkey-*
+.panel-cookies
+panel_client.py
+
+# Images, archives and build products
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.b64
+*.test
+*.exe
+coverage.out
+/wzxjdssh
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

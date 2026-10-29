@@ -300,24 +300,28 @@ func (s *Server) acceptLoop(l net.Listener) {
 
 type clientConn struct {
 	net.Conn
-	server         *Server
-	cfg            Config
-	ip             string
-	started        time.Time
-	ctx            context.Context
-	cancel         context.CancelFunc
-	pending        atomic.Bool
-	authStage      atomic.Bool
-	bytesSent      atomic.Uint64
-	readDeadlineMu sync.Mutex
-	delaying       bool
-	recordID       int64
-	bytesReceived  atomic.Uint64
-	attemptCount   int
-	readTimedOut   atomic.Bool
-	peerClosed     atomic.Bool
-	delayStarted   time.Time     // Protected by server.mu.
-	delayed        time.Duration // Completed delay waits; protected by server.mu.
+	server          *Server
+	cfg             Config
+	ip              string
+	started         time.Time
+	ctx             context.Context
+	cancel          context.CancelFunc
+	pending         atomic.Bool
+	authStage       atomic.Bool
+	bytesSent       atomic.Uint64
+	readDeadlineMu  sync.Mutex
+	delaying        bool
+	recordID        int64
+	bytesReceived   atomic.Uint64
+	attemptCount    int
+	readTimedOut    atomic.Bool
+	peerClosed      atomic.Bool
+	delayStarted    time.Time     // Protected by server.mu.
+	delayed         time.Duration // Completed delay waits; protected by server.mu.
+	peerDuringDelay atomic.Bool
+	simulated       atomic.Bool
+	clientVersion   string
+	markedUntil     int64
 }
 
 func (c *clientConn) releasePending() {
@@ -339,6 +343,14 @@ func (c *clientConn) Read(p []byte) (int, error) {
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {
 		c.readTimedOut.Store(true)
+	} else if err != nil && !errors.Is(err, net.ErrClosed) && c.ctx != nil && c.ctx.Err() == nil && c.authStage.Load() {
+		c.readDeadlineMu.Lock()
+		if c.delaying {
+			c.peerDuringDelay.Store(true)
+		}
+		c.readDeadlineMu.Unlock()
+		c.peerClosed.Store(true)
+		c.cancel()
 	}
 	return n, err
 }
@@ -409,6 +421,17 @@ func (s *Server) handle(c *clientConn) {
 				reason = "handshake_incomplete"
 			}
 		}
+		if !stopping && c.simulated.Load() {
+			status = "simulated_disconnect"
+			reason = "marked_client_return"
+		} else if !stopping && c.peerDuringDelay.Load() && c.markedUntil == 0 {
+			status = "auth_interrupted"
+			reason = "peer_closed_during_auth_delay"
+			if s.store != nil && c.recordID != 0 && c.clientVersion != "" {
+				_, err := s.store.MarkInterruptedClient(c.recordID, c.ip, c.clientVersion, time.Now())
+				s.storageError(err)
+			}
+		}
 		c.cancel()
 		c.Conn.Close()
 		c.releasePending()
@@ -450,10 +473,25 @@ func (s *Server) handle(c *clientConn) {
 	}
 	// Callback runs only after SSH transport and key exchange are ready.
 	cfg.PreAuthConnCallback = func(meta ssh.ServerPreAuthConn) {
+		c.clientVersion = string(meta.ClientVersion())
 		c.authStage.Store(true)
 		c.releasePending()
 		_ = c.Conn.SetReadDeadline(time.Now().Add(c.cfg.IdleTimeout))
 		if s.store != nil {
+			until, err := s.store.ClientCooldown(c.ip, c.clientVersion, time.Now())
+			if err != nil {
+				s.storageError(err)
+				c.cancel()
+				return
+			}
+			c.markedUntil = until
+			if until > 0 {
+				if err = s.store.MarkReturningClient(c.recordID, until); err != nil {
+					s.storageError(err)
+					c.cancel()
+					return
+				}
+			}
 			if err := s.store.Transport(c.recordID, string(meta.ClientVersion())); err != nil {
 				s.storageError(err)
 				c.cancel()
@@ -506,19 +544,25 @@ func (s *Server) handle(c *clientConn) {
 		}
 		return err
 	}
+	respond := func(id int64) error {
+		if c.markedUntil > time.Now().UnixMilli() {
+			return nil
+		}
+		return finishAttempt(id, delay())
+	}
 	cfg.PasswordCallback = func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 		id, err := record(meta, "password", password, nil)
 		if err != nil {
 			return nil, err
 		}
-		return nil, finishAttempt(id, delay())
+		return nil, respond(id)
 	}
 	cfg.PublicKeyCallback = func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 		id, err := record(meta, "publickey_probe", nil, key)
 		if err != nil {
 			return nil, err
 		}
-		return nil, finishAttempt(id, delay())
+		return nil, respond(id)
 	}
 	cfg.KeyboardInteractiveCallback = func(meta ssh.ConnMetadata, challenge ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
 		answers, err := challenge("", "", []string{"Password: "}, []bool{false})
@@ -530,7 +574,7 @@ func (s *Server) handle(c *clientConn) {
 		if err != nil {
 			return nil, err
 		}
-		return nil, finishAttempt(id, delay())
+		return nil, respond(id)
 	}
 	cfg.AuthLogCallback = func(meta ssh.ConnMetadata, method string, err error) {
 		if s.store != nil {
@@ -550,12 +594,15 @@ func (s *Server) handle(c *clientConn) {
 		s.log(2, "ssh_closed", map[string]any{"peer": c.RemoteAddr().String(), "reason": err.Error()})
 		return
 	}
-	// Defensive guard: no callback is allowed to authenticate. Never open a shell.
-	defer conn.Close()
-	go ssh.DiscardRequests(requests)
-	for channel := range chans {
-		_ = channel.Reject(ssh.Prohibited, "administratively prohibited")
+	// Marked clients see USERAUTH_SUCCESS, then the transport closes immediately.
+	// No session, command, forwarding or other SSH channel is served.
+	c.simulated.Store(true)
+	_ = conn.Close()
+	if s.store != nil {
+		s.storageError(s.store.RecordSimulatedDisconnect(c.recordID, c.markedUntil))
 	}
+	_ = chans
+	_ = requests
 }
 
 func randomLine(max int) ([]byte, error) {
@@ -611,7 +658,7 @@ func (s *Server) Snapshot() map[string]any {
 	}
 	cfg := s.cfg.Load()
 	live := s.liveSnapshotLocked(time.Now())
-	strategy := map[string]any{"mode": cfg.Mode, "delay_ms": cfg.Delay.Milliseconds(), "max_line_length": cfg.MaxLineLength, "max_auth_tries": cfg.MaxAuthTries, "handshake_timeout_ms": cfg.HandshakeTimeout.Milliseconds(), "idle_timeout_ms": cfg.IdleTimeout.Milliseconds(), "max_connection_time_ms": cfg.MaxConnectionTime.Milliseconds(), "max_clients": cfg.MaxClients, "max_clients_per_ip": cfg.MaxClientsPerIP, "connections_per_minute": cfg.ConnectionsPerMinute, "max_pending_handshakes": cfg.MaxPendingHandshakes}
+	strategy := map[string]any{"mode": cfg.Mode, "delay_ms": cfg.Delay.Milliseconds(), "client_cooldown_ms": clientCooldown.Milliseconds(), "max_line_length": cfg.MaxLineLength, "max_auth_tries": cfg.MaxAuthTries, "handshake_timeout_ms": cfg.HandshakeTimeout.Milliseconds(), "idle_timeout_ms": cfg.IdleTimeout.Milliseconds(), "max_connection_time_ms": cfg.MaxConnectionTime.Milliseconds(), "max_clients": cfg.MaxClients, "max_clients_per_ip": cfg.MaxClientsPerIP, "connections_per_minute": cfg.ConnectionsPerMinute, "max_pending_handshakes": cfg.MaxPendingHandshakes}
 	return map[string]any{"accepted": s.stats.accepted.Load(), "rejected": s.stats.rejected.Load(), "accept_errors": s.stats.acceptErrors.Load(), "closed": s.stats.closed.Load(), "active": s.stats.active.Load(), "pending_handshakes": s.stats.pending.Load(), "bytes_sent": s.stats.bytesSent.Load(), "auth_attempts": s.stats.authAttempts.Load(), "connection_seconds": float64(nanos) / float64(time.Second), "storage_errors": s.storageErrors.Load(), "strategy": strategy, "live": live}
 }
 

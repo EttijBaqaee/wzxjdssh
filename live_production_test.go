@@ -66,7 +66,7 @@ func TestProductionLiveRankings(t *testing.T) {
 			if fixture {
 				auth = ssh.RetryableAuthMethod(auth, 6)
 			}
-			c, _, _, err := ssh.NewClientConn(conn, target, &ssh.ClientConfig{User: fmt.Sprint("live-ranking-", index), Auth: []ssh.AuthMethod{auth}, HostKeyCallback: ssh.InsecureIgnoreHostKey()})
+			c, _, _, err := ssh.NewClientConn(conn, target, &ssh.ClientConfig{User: fmt.Sprint("live-ranking-", index), ClientVersion: fmt.Sprint("SSH-2.0-wzx-live-", time.Now().UnixNano()), Auth: []ssh.AuthMethod{auth}, HostKeyCallback: ssh.InsecureIgnoreHostKey()})
 			if c != nil {
 				c.Close()
 			}

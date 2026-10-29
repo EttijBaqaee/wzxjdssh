@@ -31,6 +31,8 @@ type ConnectionRecord struct {
 	BytesSent     int64  `json:"bytes_sent"`
 	BytesReceived int64  `json:"bytes_received"`
 	AuthAttempts  int64  `json:"auth_attempts"`
+	ClientMark    string `json:"client_mark"`
+	MarkExpiresAt int64  `json:"mark_expires_at"`
 }
 type AuthRecord struct {
 	ID           int64  `json:"id"`
@@ -133,6 +135,9 @@ func OpenStore(path string) (*Store, error) {
  CREATE INDEX IF NOT EXISTS auth_username ON auth_attempts(username,connection_id);
 	CREATE TABLE IF NOT EXISTS web_preferences (key TEXT PRIMARY KEY,value INTEGER NOT NULL);
 	INSERT OR IGNORE INTO web_preferences(key,value) VALUES('idle_minutes',60);
+	CREATE TABLE IF NOT EXISTS client_cooldowns (ip TEXT NOT NULL,client_version TEXT NOT NULL,expires_at INTEGER NOT NULL,PRIMARY KEY(ip,client_version));
+	CREATE INDEX IF NOT EXISTS client_cooldowns_expiry ON client_cooldowns(expires_at);
+	CREATE TABLE IF NOT EXISTS connection_marks (connection_id INTEGER PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,label TEXT NOT NULL,expires_at INTEGER NOT NULL);
 	`
 	if _, err = db.Exec(schema); err != nil {
 		db.Close()
@@ -278,6 +283,9 @@ func (s *Store) Prune(now time.Time, days int) error {
 	if _, err = tx.Exec(`DELETE FROM connections WHERE started_at < ? AND ended_at IS NOT NULL`, cutoff); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(`DELETE FROM client_cooldowns WHERE expires_at<=?`, now.UnixMilli()); err != nil {
+		return err
+	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
@@ -299,11 +307,11 @@ func (s *Store) Maintain(ctx context.Context, days int, onError func(error)) {
 	}
 }
 
-const connectionColumns = `id,peer,ip,mode,started_at,ended_at,duration_ms,status,reason,client_version,username,bytes_sent,bytes_received,auth_attempts`
+const connectionColumns = `id,peer,ip,mode,started_at,ended_at,duration_ms,status,reason,client_version,username,bytes_sent,bytes_received,auth_attempts,COALESCE((SELECT label FROM connection_marks WHERE connection_id=connections.id),''),COALESCE((SELECT expires_at FROM connection_marks WHERE connection_id=connections.id),0)`
 
 func scanConnection(row interface{ Scan(...any) error }) (ConnectionRecord, error) {
 	var c ConnectionRecord
-	err := row.Scan(&c.ID, &c.Peer, &c.IP, &c.Mode, &c.StartedAt, &c.EndedAt, &c.DurationMS, &c.Status, &c.Reason, &c.ClientVersion, &c.Username, &c.BytesSent, &c.BytesReceived, &c.AuthAttempts)
+	err := row.Scan(&c.ID, &c.Peer, &c.IP, &c.Mode, &c.StartedAt, &c.EndedAt, &c.DurationMS, &c.Status, &c.Reason, &c.ClientVersion, &c.Username, &c.BytesSent, &c.BytesReceived, &c.AuthAttempts, &c.ClientMark, &c.MarkExpiresAt)
 	return c, err
 }
 func (s *Store) List(ctx context.Context, f RecordFilter) (RecordPage, error) {

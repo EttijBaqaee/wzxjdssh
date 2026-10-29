@@ -248,7 +248,7 @@ func TestSnapshotShowsLiveDelayStrategy(t *testing.T) {
 	c := testConfig(t)
 	s := startTest(t, c)
 	policy := s.Snapshot()["strategy"].(map[string]any)
-	if policy["mode"] != "ssh" || policy["delay_ms"] != c.Delay.Milliseconds() || policy["max_auth_tries"] != c.MaxAuthTries {
+	if policy["mode"] != "ssh" || policy["delay_ms"] != c.Delay.Milliseconds() || policy["max_auth_tries"] != c.MaxAuthTries || policy["client_cooldown_ms"] != int64(3600000) {
 		t.Fatal("incorrect strategy", policy)
 	}
 	c.Delay = 75 * time.Millisecond

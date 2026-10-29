@@ -172,6 +172,8 @@ volumes:
 
 程序默认参数为：`Port 2222`、`Delay 10000`、`MaxLineLength 32`（允许 3–255，含 CRLF）、`MaxClients 4096`（允许 1–2147483647）、`LogLevel 0`、`BindFamily 0`。自动地址族在系统支持时使用 IPv6 双栈覆盖 IPv4，实际行为取决于系统。`Mode banner` 的首行也等待 Delay；`Mode ssh` 先完成真实 SSH 握手，再按 Delay 延迟认证失败响应。
 
+客户端可以主动中止连接。固定的连接或认证总超时不会被服务端延迟、认证提示或 KeepAlive 延长，例如 ssh2 1.16.0 的 `readyTimeout` 默认 20 秒，认证成功前持续计时。wzxjdssh 保持拒绝认证，不保证把这类客户端留住超过其截止时间。
+
 配置保存后，通过 1Panel 重启容器应用修改。若面板提供发送信号的入口，也可向服务进程发送 `SIGHUP` 进行事务重载；新配置非法或新端口无法绑定时保留旧配置。变更 Docker 端口映射属于编排变更，需要重新部署容器。单文件 bind mount 配合原子替换可能仍指向旧文件，因此示例挂载整个配置目录。
 
 默认 `LogLevel 0` 只输出重要事件。需要连接日志时将配置设为 `LogLevel 1`，或给服务增加 `command: ["-v"]`；调试使用 `LogLevel 2` 或 `command: ["-vv"]`。

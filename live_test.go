@@ -123,3 +123,44 @@ func TestLiveSSHCountsOnlyImposedDelay(t *testing.T) {
 	raw.Close()
 	eventually(t, func() bool { return len(snapshot().LongestConnections) == 0 })
 }
+
+func TestLiveIPv6ConcurrentConnections(t *testing.T) {
+	listener, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Fatal("IPv6 loopback unavailable in test container", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	cfg := testConfig(t)
+	cfg.BindAddress = "::1"
+	cfg.BindFamily = 6
+	cfg.Port = port
+	cfg.Mode = "banner"
+	cfg.Delay = time.Second
+	s := startTest(t, cfg)
+	target := net.JoinHostPort("::1", fmt.Sprint(port))
+	var connections []net.Conn
+	for i := 0; i < 2; i++ {
+		c, err := net.DialTimeout("tcp6", target, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		connections = append(connections, c)
+		defer c.Close()
+	}
+	eventually(t, func() bool {
+		v := s.Snapshot()["live"].(LiveStats)
+		return v.DelayingIPs == 1 && v.DelayingConnections == 2 && len(v.IPConcurrency) == 1 && v.IPConcurrency[0].IP == "::1" && v.IPConcurrency[0].Connections == 2
+	})
+	v := s.Snapshot()["live"].(LiveStats)
+	for _, c := range v.LongestConnections {
+		ip, _, err := net.SplitHostPort(c.Peer)
+		if err != nil || ip != "::1" {
+			t.Fatal("IPv6 peer formatting", c.Peer, err)
+		}
+	}
+	for _, c := range connections {
+		c.Close()
+	}
+	eventually(t, func() bool { return len(s.Snapshot()["live"].(LiveStats).LongestConnections) == 0 })
+}

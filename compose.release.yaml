@@ -1,7 +1,7 @@
 services:
   wzxjdssh:
-    image: wzxjdssh:2.0.0
-    pull_policy: never
+    image: ghcr.io/ettijbaqaee/wzxjdssh:2.0.0
+    pull_policy: missing
     container_name: wzxjdssh
     restart: unless-stopped
     ports:

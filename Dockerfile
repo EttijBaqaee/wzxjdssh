@@ -31,6 +31,8 @@ USER 1000:1000
 
 FROM scratch AS runtime
 ARG VERSION=2.0.0
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision="${VCS_REF}"
 LABEL org.opencontainers.image.title="wzxjdssh" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.licenses="MIT" org.opencontainers.image.source="https://github.com/EttijBaqaee/wzxjdssh" org.opencontainers.image.description="SSH transport honeypot with delayed authentication, SQLite records and Web UI"
 COPY --from=builder /wzxjdssh /wzxjdssh
 COPY --from=builder --chown=65532:65532 /empty-data /data

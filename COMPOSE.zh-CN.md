@@ -1,8 +1,10 @@
-# wzxjdssh 2.0.0：1Panel 编排使用文档
+# wzxjdssh 2.0.0： 编排使用文档
 
-配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `wzxjdssh:2.0.0`，支持 Linux amd64。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
+配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.0`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
 
-先在 1Panel 构建或导入本地镜像，然后创建编排、粘贴配套 YAML。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
+创建编排、粘贴配套 YAML，首次部署会从 GHCR 拉取镜像。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
+
+离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.0.0`、`pull_policy` 改为 `never`。
 
 ## 端口映射
 
@@ -119,8 +121,8 @@ environment:
 
 | 字段 | 当前值 | 用途 |
 | --- | --- | --- |
-| image | wzxjdssh:2.0.0 | 指定本地镜像版本 |
-| pull_policy | never | 使用本地镜像，不从远端拉取 |
+| image | ghcr.io/ettijbaqaee/wzxjdssh:2.0.0 | 固定 GHCR 镜像版本 |
+| pull_policy | missing | 本地没有镜像时从 GHCR 拉取 |
 | container_name | wzxjdssh | 固定容器名；同一宿主机部署多份时需分别命名或移除此字段 |
 | restart | unless-stopped | 自动恢复容器；手动停止后保持停止 |
 | volumes | hostkeys:/data、records:/var/lib/wzxjdssh | 保存主机密钥与 SQLite 记录 |
@@ -141,7 +143,7 @@ environment:
 
 `hostkeys` 是 Docker 命名卷；默认实际卷名包含编排项目名。因此，升级时应编辑原有编排，保留同一个编排名和卷声明。另建编排通常会创建新卷，从而生成不同主机密钥。
 
-升级步骤：先在 1Panel 导入新镜像，再修改原编排的 `image` 标签并重新部署。保留 `hostkeys:/data` 即可沿用原密钥。回滚同样通过修改镜像标签完成。删除数据卷会丢失密钥；备份和恢复时保留文件权限，并限制备份的读取权限。
+升级步骤：修改原编排的 `image` 为 GHCR 新版本标签并重新部署，缺少镜像时自动拉取。离线升级先在 1Panel 导入新镜像，再指定对应本地标签。保留 `hostkeys:/data` 即可沿用原密钥。回滚同样通过修改镜像标签完成。删除数据卷会丢失密钥；备份和恢复时保留文件权限，并限制备份的读取权限。
 
 从 1.x 升级到 2.0：替换编排内容时保留原编排名及 `hostkeys` 卷，新增 `records:/var/lib/wzxjdssh` 和顶层 `records` 卷声明，设置管理员密码。1.x 没有记录历史凭据，升级后才开始积累记录。此后的升级同时保留两个卷。
 

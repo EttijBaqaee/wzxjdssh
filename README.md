@@ -4,7 +4,9 @@
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后收到成功消息，随后立即断开。不提供 Shell、SFTP 或端口转发。
 
-当前开发版本：**2.0.0**
+当前版本：**2.0.0**
+
+镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.0.0`（Linux amd64），同时提供 `latest` 标签。
 
 ## 工作原理
 
@@ -40,12 +42,12 @@
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 先在 1Panel 中构建本仓库的 `Dockerfile`，标签设为 `wzxjdssh:2.0.0`；或导入自行保存的同标签镜像。Dockerfile 的最终阶段为正式运行镜像，测试工具不会进入最终镜像。
-2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`。
+1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.0`，无需自行构建。
+2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`；缺少镜像时会自动拉取。
 3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
-编排使用 `pull_policy: never`，直接使用已构建或导入的本地镜像。
+编排使用 `pull_policy: missing`，固定到 `2.0.0` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.0.0`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像，测试工具不会进入最终镜像。
 
 ### 常用编排参数
 

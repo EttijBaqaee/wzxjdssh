@@ -23,7 +23,7 @@ function chart(points){
   points.forEach((p,i)=>{const x=42+i*step;for(const[field,offset,cls]of[['connections',0,'bar-connection'],['attempts',barWidth+1,'bar-attempt']]){const h=p[field]/max*138;const bar=add('rect',{x:x+offset,y:158-h,width:barWidth,height:Math.max(h,p[field]?2:0),rx:1.5,class:cls});const title=document.createElementNS(ns,'title');title.textContent=p.day+' '+(field==='connections'?'连接':'认证')+' '+p[field];bar.append(title);}if(i%(width<600?10:5)===0||i===points.length-1)add('text',{x:x+step/2,y:185,class:'chart-axis','text-anchor':i===0?'start':i===points.length-1?'end':'middle'},p.day.slice(5));});
   $('trend').replaceChildren(svg);
 }
-async function overview(){const data=await api('stats');const s=data.stored;const cards=[['累计连接',s.connections],['当前在线',s.active],['认证尝试',s.attempts],['独立来源 IP',s.unique_ips],['今日连接 · UTC',s.today],['接入拒绝',s.rejected]];$('cards').replaceChildren(...cards.map(([label,value])=>{const card=el('div',undefined,'card');card.append(el('div',label,'label'),el('div',number(value),'value'));return card;}));rank('rank-sources',s.sources);rank('rank-users',s.usernames);rank('rank-methods',s.methods);chart(s.daily);renderStrategy(data.runtime.strategy);$('storage-health').textContent='统计范围：当前保留的数据 · 本次进程存储错误：'+number(data.runtime.storage_errors);}
+async function overview(){const data=await api('stats');const s=data.stored;const live=data.runtime.live;const cards=[['累计连接',s.connections],['当前在线',data.runtime.active],['拖延中 IP',live.delaying_ips],['拖延中连接',live.delaying_connections],['认证尝试',s.attempts],['独立来源 IP',s.unique_ips],['今日连接 · UTC',s.today],['接入拒绝',s.rejected]];$('cards').replaceChildren(...cards.map(([label,value])=>{const card=el('div',undefined,'card');card.append(el('div',label,'label'),el('div',number(value),'value'));return card;}));rank('rank-sources',s.sources);rank('rank-users',s.usernames);rank('rank-methods',s.methods);chart(s.daily);renderLive(live);$('storage-health').textContent='实时指标与榜单按当前在线连接计算 · 历史统计范围：当前保留的数据 · 本次进程存储错误：'+number(data.runtime.storage_errors);}
 async function connections(){
   const form=new FormData($('filter-form'));const query=new URLSearchParams({page:String(state.page),limit:String(state.limit)});for(const[k,v]of form)if(v)query.set(k,v);
   const data=await api('connections?'+query);state.total=data.total;const pages=Math.max(1,Math.ceil(data.total/state.limit));if(state.page>pages){state.page=pages;return connections();}
@@ -84,7 +84,31 @@ function renderStrategy(policy){
 }
 let resizeTimer=0;addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(state.loggedIn&&state.view==='overview'&&state.daily)chart(state.daily);},100);});
 $('auto-refresh').addEventListener('click',()=>{state.autoUpdate=!state.autoUpdate;try{localStorage.setItem('wzxjdssh-auto-update',String(state.autoUpdate));}catch{};renderAutoUpdate();if(state.autoUpdate)refresh();});
-async function loadSettings(){const settings=await api('settings');$('idle-minutes').value=settings.idle_timeout_minutes;state.idleTimeout=settings.idle_timeout_seconds*1000;}
+async function loadSettings(){const [settings,stats]=await Promise.all([api('settings'),api('stats')]);$('idle-minutes').value=settings.idle_timeout_minutes;state.idleTimeout=settings.idle_timeout_seconds*1000;renderStrategy(stats.runtime.strategy);}
 $('tab-settings').addEventListener('click',()=>tab('settings'));
 $('settings-form').addEventListener('submit',async event=>{event.preventDefault();const button=event.currentTarget.querySelector('button');const message=$('settings-message');button.disabled=true;message.textContent='';try{const settings=await api('settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idle_timeout_minutes:Number($('idle-minutes').value)})});state.idleTimeout=settings.idle_timeout_seconds*1000;state.lastActivity=Date.now();$('idle-minutes').value=settings.idle_timeout_minutes;message.className='muted';message.textContent='设置已保存并生效。';try{localStorage.setItem('wzxjdssh-idle-timeout:'+location.pathname,String(state.idleTimeout));}catch{}}catch(err){message.className='error';message.textContent=err.message;}finally{button.disabled=false;}});
 addEventListener('storage',event=>{if(event.key==='wzxjdssh-idle-timeout:'+location.pathname){const ms=Number(event.newValue);if(ms>=60000&&ms<=86400000)state.idleTimeout=ms;}});
+
+function liveDuration(ms){
+  const seconds=Math.floor(Math.max(0,ms)/1000);
+  if(seconds<60)return (ms/1000).toFixed(1)+' 秒';
+  if(seconds<3600)return Math.floor(seconds/60)+' 分 '+seconds%60+' 秒';
+  return Math.floor(seconds/3600)+' 小时 '+Math.floor(seconds%3600/60)+' 分';
+}
+function renderLive(live){
+  const delays=$('rank-delays');delays.replaceChildren();
+  if(!live.longest_connections.length)delays.append(el('li','暂无在线连接','empty'));
+  live.longest_connections.forEach((item,index)=>{
+    const row=el('li');const info=el('div',undefined,'live-rank-info');const source=el('div',item.peer,'live-source');
+    const meta=el('div','在线 '+liveDuration(item.duration_ms)+' · '+(item.delaying?'正在延迟响应':item.delayed_ms?'等待客户端':'握手 / 等待认证'),'muted');
+    info.append(source,meta);
+    if(item.connection_id){const button=el('button','#'+item.connection_id+' · 详情','quiet live-detail');button.addEventListener('click',()=>detail(item.connection_id));info.append(button);}
+    row.append(el('span',String(index+1).padStart(2,'0'),'rank-number'),info,el('span',liveDuration(item.delayed_ms),'rank-count'));delays.append(row);
+  });
+  const concurrency=$('rank-concurrency');concurrency.replaceChildren();
+  if(!live.ip_concurrency.length)concurrency.append(el('li','暂无在线连接','empty'));
+  live.ip_concurrency.forEach((item,index)=>{
+    const row=el('li');const info=el('div',undefined,'live-rank-info');info.append(el('div',item.ip,'live-source'),el('div','其中拖延中 '+number(item.delaying_connections)+' 条','muted'));
+    row.append(el('span',String(index+1).padStart(2,'0'),'rank-number'),info,el('span',number(item.connections)+' 条','rank-count'));concurrency.append(row);
+  });
+}

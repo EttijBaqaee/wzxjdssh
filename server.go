@@ -316,6 +316,8 @@ type clientConn struct {
 	attemptCount   int
 	readTimedOut   atomic.Bool
 	peerClosed     atomic.Bool
+	delayStarted   time.Time     // Protected by server.mu.
+	delayed        time.Duration // Completed delay waits; protected by server.mu.
 }
 
 func (c *clientConn) releasePending() {
@@ -433,7 +435,9 @@ func (s *Server) handle(c *clientConn) {
 			s.storageError(err)
 			return
 		}
+		s.mu.Lock()
 		c.recordID = id
+		s.mu.Unlock()
 	}
 	if c.cfg.Mode == "banner" {
 		s.serveBanner(c)
@@ -463,7 +467,7 @@ func (s *Server) handle(c *clientConn) {
 		c.delaying = true
 		_ = c.Conn.SetReadDeadline(time.Time{})
 		c.readDeadlineMu.Unlock()
-		err := s.pause(c.ctx)
+		err := c.pause()
 		c.readDeadlineMu.Lock()
 		c.delaying = false
 		_ = c.Conn.SetReadDeadline(time.Now().Add(c.cfg.IdleTimeout))
@@ -585,7 +589,7 @@ func (s *Server) serveBanner(c *clientConn) {
 		c.cancel()
 	}()
 	for {
-		if err := s.pause(c.ctx); err != nil {
+		if err := c.pause(); err != nil {
 			return
 		}
 		line, err := randomLine(s.cfg.Load().MaxLineLength)
@@ -606,8 +610,9 @@ func (s *Server) Snapshot() map[string]any {
 		nanos += int64(time.Since(c.started))
 	}
 	cfg := s.cfg.Load()
+	live := s.liveSnapshotLocked(time.Now())
 	strategy := map[string]any{"mode": cfg.Mode, "delay_ms": cfg.Delay.Milliseconds(), "max_line_length": cfg.MaxLineLength, "max_auth_tries": cfg.MaxAuthTries, "handshake_timeout_ms": cfg.HandshakeTimeout.Milliseconds(), "idle_timeout_ms": cfg.IdleTimeout.Milliseconds(), "max_connection_time_ms": cfg.MaxConnectionTime.Milliseconds(), "max_clients": cfg.MaxClients, "max_clients_per_ip": cfg.MaxClientsPerIP, "connections_per_minute": cfg.ConnectionsPerMinute, "max_pending_handshakes": cfg.MaxPendingHandshakes}
-	return map[string]any{"accepted": s.stats.accepted.Load(), "rejected": s.stats.rejected.Load(), "accept_errors": s.stats.acceptErrors.Load(), "closed": s.stats.closed.Load(), "active": s.stats.active.Load(), "pending_handshakes": s.stats.pending.Load(), "bytes_sent": s.stats.bytesSent.Load(), "auth_attempts": s.stats.authAttempts.Load(), "connection_seconds": float64(nanos) / float64(time.Second), "storage_errors": s.storageErrors.Load(), "strategy": strategy}
+	return map[string]any{"accepted": s.stats.accepted.Load(), "rejected": s.stats.rejected.Load(), "accept_errors": s.stats.acceptErrors.Load(), "closed": s.stats.closed.Load(), "active": s.stats.active.Load(), "pending_handshakes": s.stats.pending.Load(), "bytes_sent": s.stats.bytesSent.Load(), "auth_attempts": s.stats.authAttempts.Load(), "connection_seconds": float64(nanos) / float64(time.Second), "storage_errors": s.storageErrors.Load(), "strategy": strategy, "live": live}
 }
 
 func (s *Server) storageError(err error) {

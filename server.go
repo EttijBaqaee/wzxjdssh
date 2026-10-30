@@ -37,6 +37,7 @@ type rateBucket struct {
 type Server struct {
 	mu            sync.Mutex
 	reloadMu      sync.Mutex
+	policyMu      sync.Mutex // Serializes persisted parallel-policy and cooldown decisions.
 	logMu         sync.Mutex
 	cfg           atomic.Pointer[Config]
 	listener      net.Listener
@@ -288,11 +289,16 @@ func (s *Server) acceptLoop(l net.Listener) {
 			s.stats.pending.Add(1)
 		}
 		s.clients[c] = struct{}{}
+		s.detectParallelLocked(c)
 		s.ipCount[ip]++
 		s.stats.active.Add(1)
 		s.stats.accepted.Add(1)
 		s.wg.Add(1)
 		s.mu.Unlock()
+		if err := s.applyParallelPolicy(c); err != nil {
+			s.storageError(err)
+			c.cancel()
+		}
 		s.log(1, "accepted", map[string]any{"peer": raw.RemoteAddr().String(), "mode": cfg.Mode, "active": s.stats.active.Load()})
 		go s.handle(c)
 	}
@@ -323,6 +329,7 @@ type clientConn struct {
 	simulated       atomic.Bool
 	clientVersion   string
 	markedUntil     int64
+	forceSlow       atomic.Bool
 }
 
 func (c *clientConn) releasePending() {
@@ -379,7 +386,11 @@ func writeAll(w io.Writer, p []byte) (int, error) {
 func (c *clientConn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.simulated.Load() {
+	if c.simulated.Load() && c.forceSlow.Load() {
+		if err := c.pause(); err != nil {
+			return 0, err
+		}
+	} else if c.simulated.Load() {
 		if err := c.networkPause(); err != nil {
 			return 0, err
 		}
@@ -433,18 +444,26 @@ func (s *Server) handle(c *clientConn) {
 			if status == "closed" {
 				status = "simulated_closed"
 			}
-		} else if !stopping && c.peerDuringDelay.Load() && c.markedUntil == 0 {
-			status = "auth_interrupted"
-			reason = "peer_closed_during_auth_delay"
-			if s.store != nil && c.recordID != 0 && c.clientVersion != "" {
-				_, err := s.store.MarkInterruptedClient(c.recordID, c.ip, c.clientVersion, time.Now())
-				s.storageError(err)
+		} else if !stopping && c.peerDuringDelay.Load() && c.markedUntil == 0 && !c.forceSlow.Load() {
+			s.policyMu.Lock()
+			if !c.forceSlow.Load() {
+				status = "auth_interrupted"
+				reason = "peer_closed_during_auth_delay"
+				if s.store != nil && c.recordID != 0 && c.clientVersion != "" {
+					_, err := s.store.MarkInterruptedClient(c.recordID, c.ip, c.clientVersion, time.Now())
+					s.storageError(err)
+				}
 			}
+			s.policyMu.Unlock()
 		}
 		c.cancel()
 		c.Conn.Close()
 		c.releasePending()
 		s.mu.Lock()
+		delayed := c.delayed
+		if !c.delayStarted.IsZero() {
+			delayed += time.Since(c.delayStarted)
+		}
 		delete(s.clients, c)
 		s.ipCount[c.ip]--
 		if s.ipCount[c.ip] == 0 {
@@ -456,7 +475,7 @@ func (s *Server) handle(c *clientConn) {
 		s.stats.closedNanos.Add(int64(duration))
 		s.stats.closed.Add(1)
 		if s.store != nil && c.recordID != 0 {
-			s.storageError(s.store.Finish(c.recordID, duration, status, reason, c.bytesSent.Load(), c.bytesReceived.Load()))
+			s.storageError(s.store.finish(c.recordID, duration, status, reason, c.bytesSent.Load(), c.bytesReceived.Load(), delayed))
 		}
 		s.log(1, "closed", map[string]any{"peer": c.RemoteAddr().String(), "duration_ms": duration.Milliseconds(), "bytes_sent": c.bytesSent.Load()})
 	}()
@@ -470,13 +489,23 @@ func (s *Server) handle(c *clientConn) {
 		s.mu.Lock()
 		c.recordID = id
 		s.mu.Unlock()
+		if c.forceSlow.Load() {
+			if err := s.store.MarkParallelConnection(id); err != nil {
+				s.storageError(err)
+				return
+			}
+		}
 	}
 	if c.cfg.Mode == "banner" {
 		s.serveBanner(c)
 		return
 	}
 	_ = c.Conn.SetReadDeadline(time.Now().Add(c.cfg.HandshakeTimeout))
-	cfg := &ssh.ServerConfig{MaxAuthTries: c.cfg.MaxAuthTries, ServerVersion: c.cfg.ServerVersion}
+	maxAuthTries := c.cfg.MaxAuthTries
+	if maxAuthTries == 0 {
+		maxAuthTries = -1
+	}
+	cfg := &ssh.ServerConfig{MaxAuthTries: maxAuthTries, ServerVersion: c.cfg.ServerVersion}
 	for _, key := range s.keys {
 		cfg.AddHostKey(key)
 	}
@@ -487,18 +516,24 @@ func (s *Server) handle(c *clientConn) {
 		c.releasePending()
 		_ = c.Conn.SetReadDeadline(time.Now().Add(c.cfg.IdleTimeout))
 		if s.store != nil {
-			until, err := s.store.ClientCooldown(c.ip, c.clientVersion, time.Now())
-			if err != nil {
-				s.storageError(err)
-				c.cancel()
-				return
-			}
-			c.markedUntil = until
-			if until > 0 {
-				if err = s.store.MarkReturningClient(c.recordID, until); err != nil {
+			s.policyMu.Lock()
+			defer s.policyMu.Unlock()
+			if c.forceSlow.Load() {
+				s.storageError(s.store.MarkParallelConnection(c.recordID))
+			} else {
+				until, err := s.store.ClientCooldown(c.ip, c.clientVersion, time.Now())
+				if err != nil {
 					s.storageError(err)
 					c.cancel()
 					return
+				}
+				c.markedUntil = until
+				if until > 0 {
+					if err = s.store.MarkReturningClient(c.recordID, until); err != nil {
+						s.storageError(err)
+						c.cancel()
+						return
+					}
 				}
 			}
 			if err := s.store.Transport(c.recordID, string(meta.ClientVersion())); err != nil {
@@ -554,7 +589,7 @@ func (s *Server) handle(c *clientConn) {
 		return err
 	}
 	respond := func(id int64) error {
-		if c.markedUntil > time.Now().UnixMilli() {
+		if !c.forceSlow.Load() && c.markedUntil > time.Now().UnixMilli() {
 			return nil
 		}
 		return finishAttempt(id, delay())
@@ -673,6 +708,9 @@ func (s *Server) Snapshot() map[string]any {
 	live := s.liveSnapshotLocked(time.Now())
 	strategy := map[string]any{"mode": cfg.Mode, "delay_ms": cfg.Delay.Milliseconds(), "client_cooldown_ms": clientCooldown.Milliseconds(), "max_line_length": cfg.MaxLineLength, "max_auth_tries": cfg.MaxAuthTries, "handshake_timeout_ms": cfg.HandshakeTimeout.Milliseconds(), "idle_timeout_ms": cfg.IdleTimeout.Milliseconds(), "max_connection_time_ms": cfg.MaxConnectionTime.Milliseconds(), "max_clients": cfg.MaxClients, "max_clients_per_ip": cfg.MaxClientsPerIP, "connections_per_minute": cfg.ConnectionsPerMinute, "max_pending_handshakes": cfg.MaxPendingHandshakes}
 	strategy["cooldown_return_mode"] = "network_jitter"
+	strategy["parallel_window_ms"] = cfg.ParallelWindow.Milliseconds()
+	strategy["parallel_connections"] = cfg.ParallelConnections
+	strategy["parallel_mode"] = "delayed_rejection"
 	strategy["network_jitter"] = networkDelayPolicy(cfg.Delay)
 	return map[string]any{"accepted": s.stats.accepted.Load(), "rejected": s.stats.rejected.Load(), "accept_errors": s.stats.acceptErrors.Load(), "closed": s.stats.closed.Load(), "active": s.stats.active.Load(), "pending_handshakes": s.stats.pending.Load(), "bytes_sent": s.stats.bytesSent.Load(), "auth_attempts": s.stats.authAttempts.Load(), "connection_seconds": float64(nanos) / float64(time.Second), "storage_errors": s.storageErrors.Load(), "strategy": strategy, "live": live}
 }

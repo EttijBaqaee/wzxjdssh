@@ -44,6 +44,27 @@ func TestRuntimeConfiguration(t *testing.T) {
 	}
 }
 
+func TestAdminUsernameEmptyDefaultsAndCustomLogin(t *testing.T) {
+	t.Setenv("WZXJDSSH_ADMIN_PASSWORD", "custom-admin-password")
+	t.Setenv("WZXJDSSH_WEB_ENABLED", "true")
+	for _, name := range []string{"", "admin", "custom-admin"} {
+		t.Setenv("WZXJDSSH_ADMIN_USERNAME", name)
+		cfg, err := runtimeConfig()
+		if err != nil { t.Fatal(err) }
+		want := name
+		if want == "" { want = "admin" }
+		if cfg.AdminUsername != want { t.Fatal(cfg.AdminUsername, want) }
+		w, err := NewWeb(cfg, testStore(t), nil)
+		if err != nil { t.Fatal(err) }
+		body, _ := json.Marshal(map[string]string{"username": want, "password": cfg.AdminPassword})
+		r := httptest.NewRequest("POST", "http://example.test/api/login", strings.NewReader(string(body)))
+		r.Header.Set("Content-Type", "application/json")
+		rw := httptest.NewRecorder()
+		w.Handler().ServeHTTP(rw, r)
+		if rw.Code != 200 { t.Fatal(name, rw.Code, rw.Body.String()) }
+	}
+}
+
 func TestWebAuthenticationPrefixAndRecords(t *testing.T) {
 	s := testStore(t)
 	id := mustStart(t, s, "192.0.2.1", time.Now())
@@ -68,7 +89,7 @@ func TestWebAuthenticationPrefixAndRecords(t *testing.T) {
 		h.ServeHTTP(rw, r)
 		return rw
 	}
-	for _, path := range []string{"/sshpanel/api/stats", "/sshpanel/api/connections", fmt.Sprint("/sshpanel/api/connections/", id), "/sshpanel/api/session", "/sshpanel/api/settings"} {
+	for _, path := range []string{"/sshpanel/api/stats", "/sshpanel/api/ips", "/sshpanel/api/connections", fmt.Sprint("/sshpanel/api/connections/", id), "/sshpanel/api/session", "/sshpanel/api/settings"} {
 		if r := call("GET", path, "", nil, ""); r.Code != 401 || strings.Contains(r.Body.String(), "test-secret") {
 			t.Fatal(path, r.Code, r.Body.String())
 		}

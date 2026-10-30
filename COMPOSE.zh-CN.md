@@ -1,10 +1,10 @@
-# wzxjdssh 2.0.1： 编排使用文档
+# wzxjdssh 2.0.2： 编排使用文档
 
-配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.1`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
+配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.2`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
 
 创建编排、粘贴配套 YAML，首次部署会从 GHCR 拉取镜像。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
 
-离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.0.1`、`pull_policy` 改为 `never`。
+离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.0.2`、`pull_policy` 改为 `never`。
 
 ## 端口映射
 
@@ -35,13 +35,15 @@ WZXJDSSH_PORT=22
 
 | 环境参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `WZXJDSSH_ADMIN_USERNAME` | `admin` | 管理员用户名 |
+| `WZXJDSSH_ADMIN_USERNAME` | `admin` | 管理员用户名，未填写或留空时使用 admin |
 | `WZXJDSSH_ADMIN_PASSWORD` | 必填 | 至少 12 字节，无默认密码 |
 | `WZXJDSSH_WEB_BIND` | `127.0.0.1` | Web 宿主机绑定地址 |
 | `WZXJDSSH_WEB_PORT` | `2223` | Web 宿主机端口，容器内固定 2223 |
 | `WZXJDSSH_WEB_BASE_PATH` | 空 | 前缀如 `/sshpanel`；支持字母、数字、`-`、`_` 组成的多级路径 |
 | `WZXJDSSH_WEB_SECURE_COOKIE` | `false` | HTTPS 访问时设置 `true` |
 | `WZXJDSSH_RETENTION_DAYS` | `90` | 保留天数，范围 1–36500 |
+| `WZXJDSSH_DATABASE_MAX_MB` | `0`，不启用 | 主库及 WAL/SHM 合计容量上限，单位 MiB；1024 为 1 GiB |
+| `WZXJDSSH_MAX_AUTH_TRIES` | `0`，不限次数 | 单连接认证上限，仍受最长连接时间约束 |
 
 直接通过局域网访问的参数示例：
 
@@ -60,6 +62,30 @@ WZXJDSSH_RETENTION_DAYS=90
 总览的“拖延中 IP”按当前正在延迟响应的来源 IP 去重；同一 IP 的多条连接单独显示在“拖延中连接”。在线连接榜按累计服务端延迟时长降序排列，包含尚未完成的等待，不把握手或客户端思考时间计入拖延。单 IP 并发榜按当前在线连接数排序，包含握手、等待认证和延迟响应阶段；两榜最多显示 10 项，断开连接后在下次刷新移出。开启自动更新时每 10 秒更新一次。
 
 当前生效的拖延策略在“管理设置”展示；修改服务配置并成功重载或重启后，重新进入管理设置或点击刷新即可读取新值。
+
+### 数据库容量保护
+
+编排环境参数留空或设为 0 时，容量清理不启用。要在超过 1 GiB 后自动清理，在编排的环境参数区填写：
+
+```dotenv
+WZXJDSSH_DATABASE_MAX_MB=1024
+```
+
+配套 YAML 已将此参数传入容器；自行编写编排时，在服务 `environment:` 添加：
+
+```yaml
+WZXJDSSH_DATABASE_MAX_MB: "${WZXJDSSH_DATABASE_MAX_MB:-0}"
+```
+
+超过上限后，从最旧连接开始清理，已结束连接与其认证记录一并删除；在线连接保留元数据，清理其旧认证内容。容量清理会合并 WAL 并回收 SQLite 文件空间，目标约为上限的 90%。写入后检查并每秒补查，写入和回收期间可能短暂超限；旧库完整 VACUUM 可能需要额外临时磁盘空间。这个参数控制数据库，不包括日志、备份和主机密钥。保留天数与容量限制同时生效，先达到哪个条件就按哪个条件清理。
+
+### IP 汇总与并发策略
+
+连接记录主表以 IP 为单位，显示连接次数、当前在线、最近连接、认证次数和最长在线时长；点击“查看连接”展开来源端口与认证详情。筛选后只汇总符合条件的连接。两层分页均支持“最新一页”“最旧一页”。
+
+密码榜统计密码认证和交互认证的单个密码回答。单 IP 拖延榜按该 IP 单次连接的最长实际拖延排序，同时显示累计拖延；包含在线和已结束连接，旧版没有记录的时长不做推算。
+
+默认同 IP 在 60 秒内出现至少两条重叠连接时，全部连接使用慢速策略，后续认证延迟拒绝；清除该 IP 的旧冷却标记，这组连接中途断开也不产生认证超时标记。已有仿真会话改为固定间隔响应。连接生命周期内保持该策略；新连接窗口内继续继承，持续并发会续期；窗口到期且没有慢速连接后，恢复正常判定。可挂载配置文件修改 `ParallelWindow`（毫秒）和 `ParallelConnections`。`WZXJDSSH_MAX_AUTH_TRIES=0` 表示不限认证次数，默认最长连接时间仍为 1 小时。
 
 ### 反代到 80 / 443
 
@@ -121,7 +147,7 @@ environment:
 
 | 字段 | 当前值 | 用途 |
 | --- | --- | --- |
-| image | ghcr.io/ettijbaqaee/wzxjdssh:2.0.1 | 固定 GHCR 镜像版本 |
+| image | ghcr.io/ettijbaqaee/wzxjdssh:2.0.2 | 固定 GHCR 镜像版本 |
 | pull_policy | missing | 本地没有镜像时从 GHCR 拉取 |
 | container_name | wzxjdssh | 固定容器名；同一宿主机部署多份时需分别命名或移除此字段 |
 | restart | unless-stopped | 自动恢复容器；手动停止后保持停止 |

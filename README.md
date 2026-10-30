@@ -4,9 +4,9 @@
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
 
-当前版本：**2.0.1**
+当前版本：**2.0.2**
 
-镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.0.1`（Linux amd64），同时提供 `latest` 标签。
+镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.0.2`（Linux amd64），同时提供 `latest` 标签。
 
 ## 工作原理
 
@@ -17,7 +17,9 @@
 3. 接受密码、公钥探测或 keyboard-interactive 认证流程，按 `Delay` 等待后拒绝认证。
 4. 达到认证次数、超时或资源上限时关闭连接。
 
-默认每次认证延迟 **10 秒**，单连接最多 **6 次认证失败**。客户端自己的超时或主动断开也会结束连接。
+默认每次认证延迟 **10 秒**，单连接**不限制认证次数**，仍受最长连接时间约束。客户端自己的超时或主动断开也会结束连接。
+
+同一 IP 在 60 秒内出现至少两条重叠连接时，所有在线连接优先使用慢速策略，后续认证继续延迟拒绝。该 IP 的旧冷却标记会被清除，这组连接断开时不会再写入认证超时标记。并发策略优先于单客户端冷却；已经进入仿真会话的连接改为固定间隔响应，仍不执行任何命令。
 
 可选 `Mode banner` 在版本交换前持续、缓慢地发送随机可打印字符和 CRLF；首行同样等待 `Delay`。这种模式不完成真实 SSH 握手。
 
@@ -31,6 +33,9 @@
 - 内置 SQLite，记录连接状态、来源、时间、时长、客户端标识和认证尝试，默认保留 90 天。
 - 记录用户名、密码、keyboard-interactive 回答，以及客户端提交的公钥正文和 SHA256 指纹；SSH 不传输客户端私钥，公钥探测也不证明持有对应私钥。
 - 内置中文 Web UI：统计概览、最近 30 天趋势、来源/用户名/认证方式排行、连接筛选和详情。
+- 新增密码 TOP 10、单 IP 最长实际拖延 TOP 10；后者保留已结束连接的实测值，显示每个 IP 的最长单次拖延和累计拖延。
+- 连接记录按 IP 汇总，展开后保留每次连接、来源端口与认证详情；主表和展开表均支持最新一页、最旧一页。
+- 可选数据库容量上限；超过后按最旧连接清理认证记录并回收 SQLite 文件空间，留空或 0 时不启用容量清理。
 - Web UI 管理员密码通过编排设置，支持路径前缀及 HTTP/HTTPS 反代。
 - 明亮、暗黑两种主题默认跟随浏览器，可手动切换并记住选择；自动更新开关可暂停每 10 秒刷新。
 - 手机连接记录采用卡片布局；管理设置展示当前生效的拖延策略，可保存闲置退出时间（默认 60 分钟，范围 1–1440 分钟）。
@@ -42,12 +47,12 @@
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.1`，无需自行构建。
+1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.2`，无需自行构建。
 2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`；缺少镜像时会自动拉取。
 3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
-编排使用 `pull_policy: missing`，固定到 `2.0.1` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.0.1`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像，测试工具不会进入最终镜像。
+编排使用 `pull_policy: missing`，固定到 `2.0.2` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.0.2`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像，测试工具不会进入最终镜像。
 
 ### 常用编排参数
 
@@ -57,11 +62,13 @@
 | `WZXJDSSH_SERVER_VERSION` | `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4` | 对外发送的 SSH 版本标识，未设置或留空时使用此默认值 |
 | `WZXJDSSH_WEB_PORT` | `2223` | Web UI 宿主机端口 |
 | `WZXJDSSH_WEB_BIND` | `127.0.0.1` | Web 绑定地址；直接远程访问可设 `0.0.0.0` |
-| `WZXJDSSH_ADMIN_USERNAME` | `admin` | 管理员用户名 |
+| `WZXJDSSH_ADMIN_USERNAME` | `admin` | 管理员用户名，未填写或留空时使用 admin |
 | `WZXJDSSH_ADMIN_PASSWORD` | 必填 | 管理员密码，至少 12 字节 |
 | `WZXJDSSH_WEB_BASE_PATH` | 空，使用 `/` | 路径前缀，例如 `/sshpanel` |
 | `WZXJDSSH_WEB_SECURE_COOKIE` | `false` | 通过 HTTPS 访问时设置 `true` |
 | `WZXJDSSH_RETENTION_DAYS` | `90` | 历史记录保留天数，范围 1–36500 |
+| `WZXJDSSH_DATABASE_MAX_MB` | `0`，不启用 | 数据库主文件、WAL、SHM 合计容量，单位 MiB；`1024` 为 1 GiB |
+| `WZXJDSSH_MAX_AUTH_TRIES` | `0` | 单连接认证次数上限；0 不限次数，范围 0–1000000 |
 
 例如，发布到宿主机 22，并自定义版本标识：
 
@@ -97,7 +104,9 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 | `MaxClientsPerIP` | 64 | 每 IP 并发上限；0 关闭此限制 |
 | `ConnectionsPerMinute` | 120 | 每 IP 令牌桶补充速率及突发容量；0 关闭 |
 | `MaxPendingHandshakes` | 128 | 同时进行的 SSH 握手上限 |
-| `MaxAuthTries` | 6 | 单连接认证失败次数上限 |
+| `MaxAuthTries` | 0 | 单连接认证失败次数上限；0 不限次数 |
+| `ParallelWindow` | 60000 | 同 IP 短时并发判定及新连接慢速保留窗口，毫秒 |
+| `ParallelConnections` | 2 | 窗口内重叠连接达到此数量后，对该 IP 全部连接使用慢速策略 |
 | `HandshakeTimeout` | 20000 | 版本交换和密钥交换超时 |
 | `IdleTimeout` | 120000 | 认证阶段客户端空闲超时；服务端主动等待不计入 |
 | `WriteTimeout` | 5000 | 一次完整写入的超时 |
@@ -117,6 +126,10 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 数据库保存对方实际提交的认证内容，请限制管理入口和备份的访问权限。只部署一个实例读写同一数据库目录。备份时先停止编排服务，再备份整个 `records` 卷；运行中备份应使用 SQLite Backup API，不能只复制主数据库而遗漏 WAL。
 
 程序启动及每小时清理过期记录。认证按提交时间过期，已结束连接按开始时间过期；仍在线的连接在结束后清理。删除记录会供 SQLite 重用空间，不保证立即缩小文件或擦除外部快照。Web 总览覆盖当前保留数据，趋势显示最近 30 天，日统计按 UTC，详情时间按浏览器本地时区展示。
+
+容量清理独立于保留天数。设置 `WZXJDSSH_DATABASE_MAX_MB=1024` 后，数据库超过 1 GiB 时按最旧连接开始删除，并把容量降到约 90% 以减少反复清理。已结束连接连同认证内容一起删除；在线连接保留元数据，优先清理其旧认证内容。程序会检查点合并 WAL 并回收空闲页，写入后检查并每秒补查；写入和回收期间可能短暂超过阈值。旧数据库的空闲页如需完整 VACUUM，回收期间需要额外临时磁盘空间。此参数不限制容器日志、备份或主机密钥。
+
+升级前没有保存的拖延时长不会用在线时长代替；历史拖延榜从新版实际记录开始累计。
 
 Web 管理会话默认闲置 1 小时自动退出，可在“管理设置”修改为 1–1440 分钟并持久保存。自动更新不延长会话；退出或容器重启后失效。反代保留路径前缀的 Nginx 示例和升级步骤见 [编排文档](COMPOSE.zh-CN.md)。
 

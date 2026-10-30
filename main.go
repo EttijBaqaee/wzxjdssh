@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -118,6 +119,12 @@ func run() int {
 		if serverVersion := os.Getenv("WZXJDSSH_SERVER_VERSION"); serverVersion != "" {
 			c.ServerVersion = serverVersion
 		}
+		if value := os.Getenv("WZXJDSSH_MAX_AUTH_TRIES"); value != "" {
+			c.MaxAuthTries, err = strconv.Atoi(value)
+			if err != nil {
+				return c, fmt.Errorf("invalid WZXJDSSH_MAX_AUTH_TRIES")
+			}
+		}
 		if specified["p"] {
 			c.Port = port
 		}
@@ -177,6 +184,10 @@ func run() int {
 		return 1
 	}
 	defer store.Close()
+	if err = store.SetDatabaseBudget(opts.DatabaseMaxMB * 1024 * 1024); err != nil {
+		fmt.Fprintln(os.Stderr, "database capacity cleanup failed")
+		return 1
+	}
 	if err = store.Prune(time.Now(), opts.RetentionDays); err != nil {
 		fmt.Fprintln(os.Stderr, "database retention cleanup failed")
 		return 1

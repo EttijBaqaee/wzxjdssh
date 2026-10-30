@@ -204,6 +204,7 @@ func (w *Web) Handler() http.Handler {
 	mux.HandleFunc("POST /api/settings", w.protected(w.settings))
 	mux.HandleFunc("GET /api/stats", w.protected(w.stats))
 	mux.HandleFunc("GET /api/connections", w.protected(w.connections))
+	mux.HandleFunc("GET /api/ips", w.protected(w.ips))
 	mux.HandleFunc("GET /api/connections/{id}", w.protected(w.detail))
 	files, _ := fs.Sub(webFiles, "web")
 	mux.HandleFunc("GET /", func(rw http.ResponseWriter, r *http.Request) {
@@ -335,16 +336,30 @@ func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	sendJSON(rw, 200, map[string]bool{"ok": true})
 }
 func (w *Web) stats(rw http.ResponseWriter, r *http.Request) {
+	live := map[string]any{}
+	var measured []liveDelay
+	if w.snapshot != nil {
+		live = w.snapshot()
+		if snapshot, ok := live["live"].(LiveStats); ok {
+			measured = snapshot.measured
+		}
+	}
 	stats, err := w.store.Stats(r.Context())
 	if err != nil {
 		sendJSON(rw, 500, map[string]string{"error": "无法读取统计数据"})
 		return
 	}
-	live := map[string]any{}
-	if w.snapshot != nil {
-		live = w.snapshot()
+	delays, err := w.store.DelayRanking(r.Context(), measured)
+	if err != nil {
+		sendJSON(rw, 500, map[string]string{"error": "无法读取拖延排行"})
+		return
 	}
-	sendJSON(rw, 200, map[string]any{"stored": stats, "runtime": live, "retention_days": w.cfg.RetentionDays, "timezone": "UTC"})
+	size, err := w.store.DatabaseBytes()
+	if err != nil {
+		sendJSON(rw, 500, map[string]string{"error": "无法读取数据库容量"})
+		return
+	}
+	sendJSON(rw, 200, map[string]any{"stored": stats, "runtime": live, "ip_delays": delays, "database": map[string]any{"bytes": size, "max_bytes": w.store.maxBytes.Load(), "capacity_deleted": w.store.capacityDeleted.Load()}, "retention_days": w.cfg.RetentionDays, "timezone": "UTC"})
 }
 
 func (w *Web) settings(rw http.ResponseWriter, r *http.Request) {
@@ -406,7 +421,7 @@ func (w *Web) connections(rw http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page, _ := strconv.Atoi(q.Get("page"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	f := RecordFilter{Page: page, Limit: limit, IP: q.Get("ip"), Username: q.Get("username"), Status: q.Get("status")}
+	f := RecordFilter{Page: page, Limit: limit, Last: q.Get("page") == "last", IP: q.Get("ip"), Username: q.Get("username"), Status: q.Get("status")}
 	if len(f.IP) > 128 || len(f.Username) > 4096 || len(f.Status) > 64 {
 		sendJSON(rw, 400, map[string]string{"error": "筛选条件过长"})
 		return
@@ -414,6 +429,22 @@ func (w *Web) connections(rw http.ResponseWriter, r *http.Request) {
 	out, err := w.store.List(r.Context(), f)
 	if err != nil {
 		sendJSON(rw, 500, map[string]string{"error": "无法读取连接记录"})
+		return
+	}
+	sendJSON(rw, 200, out)
+}
+func (w *Web) ips(rw http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	f := RecordFilter{Page: page, Limit: limit, Last: q.Get("page") == "last", IP: q.Get("ip"), Username: q.Get("username"), Status: q.Get("status")}
+	if len(f.IP) > 128 || len(f.Username) > 4096 || len(f.Status) > 64 {
+		sendJSON(rw, 400, map[string]string{"error": "筛选条件过长"})
+		return
+	}
+	out, err := w.store.ListIPs(r.Context(), f)
+	if err != nil {
+		sendJSON(rw, 500, map[string]string{"error": "无法读取 IP 记录"})
 		return
 	}
 	sendJSON(rw, 200, out)

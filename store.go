@@ -8,14 +8,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db              *sql.DB
+	path            string
+	writeMu         sync.Mutex
+	maxBytes        atomic.Int64
+	capacityDeleted atomic.Uint64
+}
 type ConnectionRecord struct {
 	ID            int64  `json:"id"`
 	Peer          string `json:"peer"`
@@ -24,6 +31,7 @@ type ConnectionRecord struct {
 	StartedAt     int64  `json:"started_at"`
 	EndedAt       *int64 `json:"ended_at"`
 	DurationMS    int64  `json:"duration_ms"`
+	DelayedMS     int64  `json:"delayed_ms"`
 	Status        string `json:"status"`
 	Reason        string `json:"reason"`
 	ClientVersion string `json:"client_version"`
@@ -49,6 +57,7 @@ type AuthRecord struct {
 }
 type RecordFilter struct {
 	Page, Limit          int
+	Last                 bool
 	IP, Username, Status string
 }
 type RecordPage struct {
@@ -75,6 +84,7 @@ type StoredStats struct {
 	Today       int64        `json:"today"`
 	Sources     []Ranking    `json:"sources"`
 	Usernames   []Ranking    `json:"usernames"`
+	Passwords   []Ranking    `json:"passwords"`
 	Methods     []Ranking    `json:"methods"`
 	Daily       []DailyPoint `json:"daily"`
 }
@@ -101,25 +111,27 @@ func OpenStore(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	s := &Store{db: db}
+	s := &Store{db: db, path: path}
 	var schemaVersion int
 	if err = db.QueryRow(`PRAGMA user_version`).Scan(&schemaVersion); err != nil {
 		db.Close()
 		return nil, err
 	}
-	if schemaVersion > 2 {
+	if schemaVersion > 3 {
 		db.Close()
 		return nil, errors.New("database schema is newer than this application")
 	}
 	schema := `PRAGMA busy_timeout=5000;
  PRAGMA foreign_keys=ON;
  PRAGMA journal_mode=WAL;
+ PRAGMA wal_autocheckpoint=128;
+ PRAGMA journal_size_limit=0;
  PRAGMA synchronous=FULL;
  PRAGMA secure_delete=ON;
  PRAGMA auto_vacuum=INCREMENTAL;
  CREATE TABLE IF NOT EXISTS connections (
  id INTEGER PRIMARY KEY, peer TEXT NOT NULL, ip TEXT NOT NULL, mode TEXT NOT NULL,
- started_at INTEGER NOT NULL, ended_at INTEGER, duration_ms INTEGER NOT NULL DEFAULT 0,
+ started_at INTEGER NOT NULL, ended_at INTEGER, duration_ms INTEGER NOT NULL DEFAULT 0, delayed_ms INTEGER NOT NULL DEFAULT 0,
 	status TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', client_version TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '',
  bytes_sent INTEGER NOT NULL DEFAULT 0, bytes_received INTEGER NOT NULL DEFAULT 0,
  auth_attempts INTEGER NOT NULL DEFAULT 0);
@@ -138,18 +150,46 @@ func OpenStore(path string) (*Store, error) {
 	CREATE TABLE IF NOT EXISTS client_cooldowns (ip TEXT NOT NULL,client_version TEXT NOT NULL,expires_at INTEGER NOT NULL,PRIMARY KEY(ip,client_version));
 	CREATE INDEX IF NOT EXISTS client_cooldowns_expiry ON client_cooldowns(expires_at);
 	CREATE TABLE IF NOT EXISTS connection_marks (connection_id INTEGER PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,label TEXT NOT NULL,expires_at INTEGER NOT NULL);
+	CREATE TABLE IF NOT EXISTS ip_slowdowns (ip TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
+	CREATE INDEX IF NOT EXISTS ip_slowdowns_expiry ON ip_slowdowns(expires_at);
 	`
 	if _, err = db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("database schema: %w", err)
 	}
-	if schemaVersion == 1 {
-		if _, err = db.Exec(`BEGIN; ALTER TABLE connections ADD COLUMN username TEXT NOT NULL DEFAULT ''; PRAGMA user_version=2; COMMIT;`); err != nil {
+	// Inspect columns too, so an interrupted or previously partial migration is safe.
+	columns := map[string]bool{}
+	rows, err := db.Query(`PRAGMA table_info(connections)`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	for rows.Next() {
+		var cid, required, primary int
+		var name, kind string
+		var def any
+		if err = rows.Scan(&cid, &name, &kind, &required, &def, &primary); err != nil {
+			rows.Close()
 			db.Close()
 			return nil, err
 		}
+		columns[name] = true
 	}
-	if _, err = db.Exec(`PRAGMA user_version=2`); err != nil {
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	for _, column := range []struct{ name, definition string }{{"username", "TEXT NOT NULL DEFAULT ''"}, {"delayed_ms", "INTEGER NOT NULL DEFAULT 0"}} {
+		if !columns[column.name] {
+			if _, err = db.Exec(`ALTER TABLE connections ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
+				db.Close()
+				return nil, err
+			}
+		}
+	}
+	if _, err = db.Exec(`PRAGMA user_version=3`); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -185,16 +225,32 @@ func (s *Store) SetWebIdleMinutes(ctx context.Context, minutes int) error {
 	return err
 }
 func (s *Store) Start(peer, ip, mode string, at time.Time) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	r, err := s.db.Exec(`INSERT INTO connections(peer,ip,mode,started_at,status) VALUES(?,?,?,?,'connected')`, peer, ip, mode, at.UnixMilli())
 	if err != nil {
 		return 0, err
 	}
-	return r.LastInsertId()
+	id, err := r.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if err = s.enforceBudgetLocked(); err != nil {
+		// Admission failed before a handler received its record ID.
+		_, _ = s.db.Exec(`DELETE FROM connections WHERE id=?`, id)
+		return 0, err
+	}
+	return id, nil
 }
 func (s *Store) Reject(peer, ip, mode, reason string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	now := time.Now().UnixMilli()
 	_, err := s.db.Exec(`INSERT INTO connections(peer,ip,mode,started_at,ended_at,status,reason) VALUES(?,?,?,?,?,'rejected',?)`, peer, ip, mode, now, now, reason)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.enforceBudgetLocked()
 }
 func (s *Store) Transport(id int64, client string) error {
 	_, err := s.db.Exec(`UPDATE connections SET status='authenticating',client_version=? WHERE id=?`, client, id)
@@ -226,6 +282,8 @@ func credentialBytes(v []byte) (string, string, bool) {
 	return base64.StdEncoding.EncodeToString(v), "base64", truncated
 }
 func (s *Store) Attempt(a AuthRecord) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	var cut bool
 	a.Username, cut = boundedText(a.Username, 4096)
 	a.Truncated = a.Truncated || cut
@@ -247,27 +305,40 @@ func (s *Store) Attempt(a AuthRecord) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return id, tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, s.enforceBudgetLocked()
 }
 func (s *Store) AttemptResult(id int64, result string) error {
 	_, err := s.db.Exec(`UPDATE auth_attempts SET result=? WHERE id=?`, result, id)
 	return err
 }
 func (s *Store) Finish(id int64, duration time.Duration, status, reason string, sent, received uint64) error {
+	return s.finish(id, duration, status, reason, sent, received, 0)
+}
+func (s *Store) finish(id int64, duration time.Duration, status, reason string, sent, received uint64, delayed time.Duration) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`UPDATE connections SET ended_at=?,duration_ms=?,status=?,reason=?,bytes_sent=?,bytes_received=? WHERE id=?`, time.Now().UnixMilli(), duration.Milliseconds(), status, reason, sent, received, id); err != nil {
+	if _, err = tx.Exec(`UPDATE connections SET ended_at=?,duration_ms=?,status=?,reason=?,bytes_sent=?,bytes_received=?,delayed_ms=? WHERE id=?`, time.Now().UnixMilli(), duration.Milliseconds(), status, reason, sent, received, delayed.Milliseconds(), id); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`UPDATE auth_attempts SET result='interrupted' WHERE connection_id=? AND result='pending'`, id); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return s.enforceBudgetLocked()
 }
 func (s *Store) Prune(now time.Time, days int) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour).UnixMilli()
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -286,6 +357,9 @@ func (s *Store) Prune(now time.Time, days int) error {
 	if _, err = tx.Exec(`DELETE FROM client_cooldowns WHERE expires_at<=?`, now.UnixMilli()); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(`DELETE FROM ip_slowdowns WHERE expires_at<=?`, now.UnixMilli()); err != nil {
+		return err
+	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
@@ -295,10 +369,16 @@ func (s *Store) Prune(now time.Time, days int) error {
 func (s *Store) Maintain(ctx context.Context, days int, onError func(error)) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
+	budgetTicker := time.NewTicker(time.Second)
+	defer budgetTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-budgetTicker.C:
+			if err := s.EnforceBudget(); err != nil {
+				onError(err)
+			}
 		case now := <-ticker.C:
 			if err := s.Prune(now, days); err != nil {
 				onError(err)
@@ -307,43 +387,27 @@ func (s *Store) Maintain(ctx context.Context, days int, onError func(error)) {
 	}
 }
 
-const connectionColumns = `id,peer,ip,mode,started_at,ended_at,duration_ms,status,reason,client_version,username,bytes_sent,bytes_received,auth_attempts,COALESCE((SELECT label FROM connection_marks WHERE connection_id=connections.id),''),COALESCE((SELECT expires_at FROM connection_marks WHERE connection_id=connections.id),0)`
+const connectionColumns = `id,peer,ip,mode,started_at,ended_at,duration_ms,delayed_ms,status,reason,client_version,username,bytes_sent,bytes_received,auth_attempts,COALESCE((SELECT label FROM connection_marks WHERE connection_id=connections.id),''),COALESCE((SELECT expires_at FROM connection_marks WHERE connection_id=connections.id),0)`
 
 func scanConnection(row interface{ Scan(...any) error }) (ConnectionRecord, error) {
 	var c ConnectionRecord
-	err := row.Scan(&c.ID, &c.Peer, &c.IP, &c.Mode, &c.StartedAt, &c.EndedAt, &c.DurationMS, &c.Status, &c.Reason, &c.ClientVersion, &c.Username, &c.BytesSent, &c.BytesReceived, &c.AuthAttempts, &c.ClientMark, &c.MarkExpiresAt)
+	err := row.Scan(&c.ID, &c.Peer, &c.IP, &c.Mode, &c.StartedAt, &c.EndedAt, &c.DurationMS, &c.DelayedMS, &c.Status, &c.Reason, &c.ClientVersion, &c.Username, &c.BytesSent, &c.BytesReceived, &c.AuthAttempts, &c.ClientMark, &c.MarkExpiresAt)
 	return c, err
 }
 func (s *Store) List(ctx context.Context, f RecordFilter) (RecordPage, error) {
 	if f.Page < 1 {
 		f.Page = 1
 	}
-	if f.Page > 1000000 {
-		f.Page = 1000000
-	}
 	if f.Limit < 1 || f.Limit > 100 {
 		f.Limit = 25
 	}
 	out := RecordPage{Items: []ConnectionRecord{}, Page: f.Page, Limit: f.Limit}
-	clauses := []string{"1=1"}
-	args := []any{}
-	if f.IP != "" {
-		clauses = append(clauses, "ip=?")
-		args = append(args, f.IP)
-	}
-	if f.Status != "" {
-		clauses = append(clauses, "status=?")
-		args = append(args, f.Status)
-	}
-	if f.Username != "" {
-		clauses = append(clauses, "(username=? OR EXISTS(SELECT 1 FROM auth_attempts a WHERE a.connection_id=connections.id AND a.username=?))")
-		args = append(args, f.Username, f.Username)
-	}
-	where := strings.Join(clauses, " AND ")
+	where, args := recordWhere(f)
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM connections WHERE `+where, args...).Scan(&out.Total); err != nil {
 		return out, err
 	}
-	args = append(args, f.Limit, (f.Page-1)*f.Limit)
+	out.Page = recordPage(f, out.Total)
+	args = append(args, f.Limit, (out.Page-1)*f.Limit)
 	rows, err := s.db.QueryContext(ctx, `SELECT `+connectionColumns+` FROM connections WHERE `+where+` ORDER BY started_at DESC,id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return out, err
@@ -379,7 +443,7 @@ func (s *Store) Detail(ctx context.Context, id int64) (ConnectionRecord, []AuthR
 	return c, attempts, rows.Err()
 }
 func (s *Store) Stats(ctx context.Context) (StoredStats, error) {
-	out := StoredStats{Sources: []Ranking{}, Usernames: []Ranking{}, Methods: []Ranking{}, Daily: []DailyPoint{}}
+	out := StoredStats{Sources: []Ranking{}, Usernames: []Ranking{}, Passwords: []Ranking{}, Methods: []Ranking{}, Daily: []DailyPoint{}}
 	today := time.Now().UTC().Truncate(24 * time.Hour).UnixMilli()
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(ended_at IS NULL),0),COUNT(DISTINCT ip),COALESCE(SUM(status='rejected'),0),COALESCE(SUM(started_at>=?),0) FROM connections`, today).Scan(&out.Connections, &out.Active, &out.UniqueIPs, &out.Rejected, &out.Today)
 	if err != nil {
@@ -395,6 +459,15 @@ func (s *Store) Stats(ctx context.Context) (StoredStats, error) {
 		{`SELECT ip,COUNT(*) AS n FROM connections GROUP BY ip ORDER BY n DESC,ip LIMIT 10`, &out.Sources},
 		{`SELECT username,COUNT(*) AS n FROM auth_attempts GROUP BY username ORDER BY n DESC,username LIMIT 10`, &out.Usernames},
 		{`SELECT method,COUNT(*) AS n FROM auth_attempts GROUP BY method ORDER BY n DESC,method LIMIT 10`, &out.Methods},
+		{`WITH passwords AS (
+		 SELECT credential AS password,encoding FROM auth_attempts WHERE method='password' AND truncated=0
+		 UNION ALL
+		 SELECT json_extract(CASE WHEN json_valid(credential) THEN credential ELSE 'null' END,'$[0]'),'utf8' FROM auth_attempts
+		 WHERE method='keyboard-interactive' AND encoding='utf8' AND truncated=0
+		 AND json_array_length(CASE WHEN json_valid(credential) THEN credential ELSE 'null' END)=1
+		 AND json_type(CASE WHEN json_valid(credential) THEN credential ELSE 'null' END,'$[0]')='text'
+		 ) SELECT CASE WHEN encoding='base64' THEN '[Base64] '||password ELSE password END,COUNT(*) AS n
+		 FROM passwords GROUP BY password,encoding ORDER BY n DESC,password,encoding LIMIT 10`, &out.Passwords},
 	} {
 		rows, err := s.db.QueryContext(ctx, item.query)
 		if err != nil {

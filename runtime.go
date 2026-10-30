@@ -12,6 +12,7 @@ import (
 type RuntimeConfig struct {
 	DatabasePath  string
 	RetentionDays int
+	DatabaseMaxMB int64
 	WebEnabled    bool
 	WebListen     string
 	WebBasePath   string
@@ -22,10 +23,13 @@ type RuntimeConfig struct {
 
 func runtimeConfig() (RuntimeConfig, error) {
 	c := RuntimeConfig{DatabasePath: "/var/lib/wzxjdssh/records.sqlite", RetentionDays: 90, WebEnabled: true, WebListen: ":2223", WebBasePath: "", AdminUsername: "admin"}
-	for name, dst := range map[string]*string{"WZXJDSSH_DATABASE_PATH": &c.DatabasePath, "WZXJDSSH_WEB_LISTEN": &c.WebListen, "WZXJDSSH_ADMIN_USERNAME": &c.AdminUsername, "WZXJDSSH_ADMIN_PASSWORD": &c.AdminPassword} {
+	for name, dst := range map[string]*string{"WZXJDSSH_DATABASE_PATH": &c.DatabasePath, "WZXJDSSH_WEB_LISTEN": &c.WebListen, "WZXJDSSH_ADMIN_PASSWORD": &c.AdminPassword} {
 		if v, ok := os.LookupEnv(name); ok {
 			*dst = v
 		}
+	}
+	if v := os.Getenv("WZXJDSSH_ADMIN_USERNAME"); v != "" {
+		c.AdminUsername = v
 	}
 	if v := os.Getenv("WZXJDSSH_RETENTION_DAYS"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -33,6 +37,13 @@ func runtimeConfig() (RuntimeConfig, error) {
 			return c, errors.New("WZXJDSSH_RETENTION_DAYS must be 1..36500")
 		}
 		c.RetentionDays = n
+	}
+	if v := os.Getenv("WZXJDSSH_DATABASE_MAX_MB"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 || n > 1048576 {
+			return c, errors.New("WZXJDSSH_DATABASE_MAX_MB must be 0..1048576 (0 disables the size limit)")
+		}
+		c.DatabaseMaxMB = n
 	}
 	for name, dst := range map[string]*bool{"WZXJDSSH_WEB_ENABLED": &c.WebEnabled, "WZXJDSSH_WEB_SECURE_COOKIE": &c.SecureCookie} {
 		if v := os.Getenv(name); v != "" {

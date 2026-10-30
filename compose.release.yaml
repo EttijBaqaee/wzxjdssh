@@ -1,6 +1,6 @@
 services:
   wzxjdssh:
-    image: ghcr.io/ettijbaqaee/wzxjdssh:2.0.1
+    image: ghcr.io/ettijbaqaee/wzxjdssh:2.0.2
     pull_policy: missing
     container_name: wzxjdssh
     restart: unless-stopped
@@ -10,6 +10,9 @@ services:
     environment:
       WZXJDSSH_SERVER_VERSION: "${WZXJDSSH_SERVER_VERSION:-SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4}"
       WZXJDSSH_RETENTION_DAYS: "${WZXJDSSH_RETENTION_DAYS:-90}"
+      # 留空或 0：禁用容量清理；1024：主库及 WAL/SHM 合计上限 1 GiB。
+      WZXJDSSH_DATABASE_MAX_MB: "${WZXJDSSH_DATABASE_MAX_MB:-0}"
+      WZXJDSSH_MAX_AUTH_TRIES: "${WZXJDSSH_MAX_AUTH_TRIES:-0}"
       WZXJDSSH_ADMIN_USERNAME: "${WZXJDSSH_ADMIN_USERNAME:-admin}"
       WZXJDSSH_ADMIN_PASSWORD: "${WZXJDSSH_ADMIN_PASSWORD:?请在编排环境参数中设置至少12位管理员密码}"
       WZXJDSSH_WEB_BASE_PATH: "${WZXJDSSH_WEB_BASE_PATH:-}"

@@ -28,6 +28,7 @@ type LiveStats struct {
 	DelayingConnections int              `json:"delaying_connections"`
 	LongestConnections  []LiveConnection `json:"longest_connections"`
 	IPConcurrency       []LiveIP         `json:"ip_concurrency"`
+	measured            []liveDelay
 }
 
 // Account for actual server waits, including the unfinished wait at snapshot time.
@@ -66,6 +67,9 @@ func (s *Server) liveSnapshotLocked(now time.Time) LiveStats {
 			ip.DelayingConnections++
 		}
 		ips[c.ip] = ip
+		if c.recordID != 0 {
+			live.measured = append(live.measured, liveDelay{ID: c.recordID, DelayedMS: elapsed.Milliseconds()})
+		}
 		live.LongestConnections = append(live.LongestConnections, LiveConnection{ConnectionID: c.recordID, IP: c.ip, Peer: c.RemoteAddr().String(), Mode: c.cfg.Mode, StartedAt: c.started.UnixMilli(), DurationMS: now.Sub(c.started).Milliseconds(), DelayedMS: elapsed.Milliseconds(), Delaying: delaying})
 	}
 	live.ActiveIPs = len(ips)

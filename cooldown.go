@@ -10,6 +10,8 @@ const clientCooldown = time.Hour
 
 // Expiry is based on the interruption, not subsequent visits.
 func (s *Store) MarkInterruptedClient(id int64, ip, version string, at time.Time) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	until := at.Add(clientCooldown).UnixMilli()
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -22,7 +24,10 @@ func (s *Store) MarkInterruptedClient(id int64, ip, version string, at time.Time
 	if _, err = tx.Exec(`INSERT OR REPLACE INTO connection_marks(connection_id,label,expires_at) VALUES(?,'auth_interrupted',?)`, id, until); err != nil {
 		return 0, err
 	}
-	return until, tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return until, s.enforceBudgetLocked()
 }
 
 func (s *Store) ClientCooldown(ip, version string, now time.Time) (int64, error) {

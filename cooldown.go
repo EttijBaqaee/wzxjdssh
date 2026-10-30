@@ -10,9 +10,13 @@ const clientCooldown = time.Hour
 
 // Expiry is based on the interruption, not subsequent visits.
 func (s *Store) MarkInterruptedClient(id int64, ip, version string, at time.Time) (int64, error) {
+	return s.markClientCooldown(id, ip, version, "auth_interrupted", at, clientCooldown)
+}
+
+func (s *Store) markClientCooldown(id int64, ip, version, label string, at time.Time, duration time.Duration) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	until := at.Add(clientCooldown).UnixMilli()
+	until := at.Add(duration).UnixMilli()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -21,7 +25,7 @@ func (s *Store) MarkInterruptedClient(id int64, ip, version string, at time.Time
 	if err = tx.QueryRow(`INSERT INTO client_cooldowns(ip,client_version,expires_at) VALUES(?,?,?) ON CONFLICT(ip,client_version) DO UPDATE SET expires_at=CASE WHEN client_cooldowns.expires_at<=? THEN excluded.expires_at ELSE client_cooldowns.expires_at END RETURNING expires_at`, ip, version, until, at.UnixMilli()).Scan(&until); err != nil {
 		return 0, err
 	}
-	if _, err = tx.Exec(`INSERT OR REPLACE INTO connection_marks(connection_id,label,expires_at) VALUES(?,'auth_interrupted',?)`, id, until); err != nil {
+	if _, err = tx.Exec(`INSERT OR REPLACE INTO connection_marks(connection_id,label,expires_at) VALUES(?,?,?)`, id, label, until); err != nil {
 		return 0, err
 	}
 	if err = tx.Commit(); err != nil {

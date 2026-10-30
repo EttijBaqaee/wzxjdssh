@@ -14,35 +14,38 @@ import (
 
 // Config is immutable after publication. Durations use Go's monotonic timers.
 type Config struct {
-	Port                  int
-	BindAddress           string
-	BindFamily            int
-	Mode                  string
-	Delay                 time.Duration
-	DelayJitter           int
-	CooldownAuthDelay     time.Duration
-	CooldownAuthMin       time.Duration
-	CooldownAuthMax       time.Duration
-	CooldownAuthStep      time.Duration
-	CooldownAuthJitter    int
-	MaxLineLength         int
-	MaxClients            int
-	MaxClientsPerIP       int
-	ConnectionsPerMinute  int
-	MaxPendingHandshakes  int
-	MaxAuthTries          int
-	ParallelWindow        time.Duration
-	ParallelCooldown      time.Duration
-	ProbeCooldown         time.Duration
-	ProbeFailureThreshold int
-	ParallelConnections   int
-	HandshakeTimeout      time.Duration
-	IdleTimeout           time.Duration
-	WriteTimeout          time.Duration
-	MaxConnectionTime     time.Duration
-	HostKeyDirectory      string
-	ServerVersion         string
-	LogLevel              int
+	Port                     int
+	BindAddress              string
+	BindFamily               int
+	Mode                     string
+	Delay                    time.Duration
+	DelayJitter              int
+	CooldownAuthDelay        time.Duration
+	CooldownAuthMin          time.Duration
+	CooldownAuthMax          time.Duration
+	CooldownAuthStep         time.Duration
+	CooldownAuthJitter       int
+	MaxLineLength            int
+	MaxClients               int
+	MaxClientsPerIP          int
+	ConnectionsPerMinute     int
+	MaxPendingHandshakes     int
+	MaxAuthTries             int
+	ParallelWindow           time.Duration
+	ParallelCooldown         time.Duration
+	ProbeCooldown            time.Duration
+	ProbeFailureThreshold    int
+	SingleAuthRetryThreshold int
+	SingleAuthRetryWindow    time.Duration
+	SingleAuthRetryCooldown  time.Duration
+	ParallelConnections      int
+	HandshakeTimeout         time.Duration
+	IdleTimeout              time.Duration
+	WriteTimeout             time.Duration
+	MaxConnectionTime        time.Duration
+	HostKeyDirectory         string
+	ServerVersion            string
+	LogLevel                 int
 }
 
 func DefaultConfig() Config {
@@ -51,6 +54,7 @@ func DefaultConfig() Config {
 		MaxClients: 4096, MaxClientsPerIP: 64, ConnectionsPerMinute: 2048,
 		MaxPendingHandshakes: 128, MaxAuthTries: 0, ParallelWindow: time.Minute, ParallelCooldown: time.Hour, ParallelConnections: 2, HandshakeTimeout: 20 * time.Second,
 		IdleTimeout: 2 * time.Minute, WriteTimeout: 5 * time.Second, MaxConnectionTime: 0, ProbeCooldown: 15 * time.Minute, ProbeFailureThreshold: 3,
+		SingleAuthRetryThreshold: 3, SingleAuthRetryWindow: 15 * time.Minute, SingleAuthRetryCooldown: time.Hour,
 		HostKeyDirectory: "/data", ServerVersion: "SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4", LogLevel: 0}
 }
 
@@ -77,6 +81,9 @@ func (c Config) Validate() error {
 		{c.ParallelCooldown >= time.Millisecond && c.ParallelCooldown <= 7*24*time.Hour, "ParallelCooldown must be 1..604800000 milliseconds"},
 		{c.ProbeCooldown >= time.Millisecond && c.ProbeCooldown <= 24*time.Hour, "ProbeCooldown must be 1..86400000 milliseconds"},
 		{c.ProbeFailureThreshold >= 1 && c.ProbeFailureThreshold <= 100000, "ProbeFailureThreshold must be 1..100000"},
+		{c.SingleAuthRetryThreshold >= 0 && c.SingleAuthRetryThreshold <= 100000, "SingleAuthRetryThreshold must be 0..100000 (0 disables detection)"},
+		{c.SingleAuthRetryWindow >= time.Millisecond && c.SingleAuthRetryWindow <= 24*time.Hour, "SingleAuthRetryWindow must be 1..86400000 milliseconds"},
+		{c.SingleAuthRetryCooldown >= time.Millisecond && c.SingleAuthRetryCooldown <= 7*24*time.Hour, "SingleAuthRetryCooldown must be 1..604800000 milliseconds"},
 		{c.ParallelConnections >= 2 && c.ParallelConnections <= 100000, "ParallelConnections must be 2..100000"},
 		{c.HandshakeTimeout >= time.Millisecond && c.HandshakeTimeout <= time.Hour, "HandshakeTimeout must be 1..3600000 milliseconds"},
 		{c.IdleTimeout >= time.Millisecond && c.IdleTimeout <= 24*time.Hour, "IdleTimeout must be 1..86400000 milliseconds"},
@@ -200,6 +207,12 @@ func parseConfig(r io.Reader) (Config, error) {
 			setDuration(&c.ProbeCooldown)
 		case "ProbeFailureThreshold":
 			setInt(&c.ProbeFailureThreshold)
+		case "SingleAuthRetryThreshold":
+			setInt(&c.SingleAuthRetryThreshold)
+		case "SingleAuthRetryWindow":
+			setDuration(&c.SingleAuthRetryWindow)
+		case "SingleAuthRetryCooldown":
+			setDuration(&c.SingleAuthRetryCooldown)
 		case "ParallelConnections":
 			setInt(&c.ParallelConnections)
 		case "HandshakeTimeout":
@@ -257,6 +270,7 @@ func configEnvironment(c Config, lookup func(string) string) (Config, error) {
 		{"MAX_AUTH_TRIES", &c.MaxAuthTries}, {"PARALLEL_CONNECTIONS", &c.ParallelConnections},
 		{"MAX_LINE_LENGTH", &c.MaxLineLength}, {"LOG_LEVEL", &c.LogLevel},
 		{"PROBE_FAILURE_THRESHOLD", &c.ProbeFailureThreshold},
+		{"SINGLE_AUTH_RETRY_THRESHOLD", &c.SingleAuthRetryThreshold},
 		{"DELAY_JITTER_PERCENT", &c.DelayJitter},
 		{"COOLDOWN_AUTH_JITTER_PERCENT", &c.CooldownAuthJitter},
 	} {
@@ -278,6 +292,8 @@ func configEnvironment(c Config, lookup func(string) string) (Config, error) {
 		{"IDLE_TIMEOUT_MS", &c.IdleTimeout}, {"WRITE_TIMEOUT_MS", &c.WriteTimeout},
 		{"MAX_CONNECTION_TIME_MS", &c.MaxConnectionTime},
 		{"PROBE_COOLDOWN_MS", &c.ProbeCooldown},
+		{"SINGLE_AUTH_RETRY_WINDOW_MS", &c.SingleAuthRetryWindow},
+		{"SINGLE_AUTH_RETRY_COOLDOWN_MS", &c.SingleAuthRetryCooldown},
 		{"COOLDOWN_AUTH_DELAY_MS", &c.CooldownAuthDelay},
 		{"COOLDOWN_AUTH_DELAY_MIN_MS", &c.CooldownAuthMin},
 		{"COOLDOWN_AUTH_DELAY_MAX_MS", &c.CooldownAuthMax},

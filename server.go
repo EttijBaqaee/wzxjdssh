@@ -55,6 +55,7 @@ type Server struct {
 	store         *Store
 	storageErrors atomic.Uint64
 	authDelays    authDelayLearning
+	singleAuth    singleAuthRetries
 }
 
 func NewServer(c Config, logWriter io.Writer) (*Server, error) {
@@ -380,6 +381,9 @@ type clientConn struct {
 	recordID            int64
 	bytesReceived       atomic.Uint64
 	attemptCount        int
+	firstAuthMethod     string
+	rejectedAuth        bool
+	peerAuthEnded       bool
 	readTimedOut        atomic.Bool
 	peerClosed          atomic.Bool
 	delayStarted        time.Time     // Protected by server.mu.
@@ -566,6 +570,12 @@ func (s *Server) handle(c *clientConn) {
 			if c.forceSlow.Load() {
 				s.storageError(s.store.ForceParallelIP(c.ip, time.Now().Add(c.cfg.ParallelCooldown).UnixMilli()))
 			}
+			if c.clientVersion != "" {
+				if s.singleAuth.observe(authDelayKey{c.ip, c.clientVersion}, c.singleAuthRetryEligible(status, reason, stopping), time.Now(), c.cfg) {
+					_, err := s.store.markClientCooldown(c.recordID, c.ip, c.clientVersion, "single_auth_retry", time.Now(), c.cfg.SingleAuthRetryCooldown)
+					s.storageError(err)
+				}
+			}
 			s.storageError(s.store.finish(c.recordID, duration, status, reason, c.bytesSent.Load(), c.bytesReceived.Load(), delayed))
 			if !stopping && c.probeUntil == 0 && c.cfg.Mode == "ssh" {
 				_, err := s.store.ProbeResult(c.recordID, c.ip, reason == "handshake_incomplete", time.Now(), c.cfg)
@@ -676,6 +686,9 @@ func (s *Server) handle(c *clientConn) {
 	}
 	record := func(meta ssh.ConnMetadata, method string, credential []byte, key ssh.PublicKey) (int64, error) {
 		c.attemptCount++
+		if c.attemptCount == 1 {
+			c.firstAuthMethod = method
+		}
 		if s.store == nil {
 			return 0, nil
 		}
@@ -694,6 +707,7 @@ func (s *Server) handle(c *clientConn) {
 		return id, nil
 	}
 	finishAttempt := func(id int64, err error) error {
+		c.rejectedAuth = errors.Is(err, denied)
 		if s.store != nil && id != 0 {
 			result := "rejected"
 			if !errors.Is(err, denied) {
@@ -758,6 +772,7 @@ func (s *Server) handle(c *clientConn) {
 	}
 	conn, chans, requests, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
+		c.peerAuthEnded = isPeerAuthEnd(err)
 		s.log(2, "ssh_closed", map[string]any{"peer": c.RemoteAddr().String(), "reason": err.Error()})
 		return
 	}
@@ -844,6 +859,9 @@ func (s *Server) Snapshot() map[string]any {
 	strategy["cooldown_auth_initial_sample"] = "interrupted_wait_minus_step"
 	strategy["probe_failure_threshold"] = cfg.ProbeFailureThreshold
 	strategy["probe_cooldown_ms"] = cfg.ProbeCooldown.Milliseconds()
+	strategy["single_auth_retry_threshold"] = cfg.SingleAuthRetryThreshold
+	strategy["single_auth_retry_window_ms"] = cfg.SingleAuthRetryWindow.Milliseconds()
+	strategy["single_auth_retry_cooldown_ms"] = cfg.SingleAuthRetryCooldown.Milliseconds()
 	strategy["cooldown_auth_delay_ms"] = cfg.CooldownAuthDelay.Milliseconds()
 	strategy["cooldown_auth_delay_min_ms"] = cfg.CooldownAuthMin.Milliseconds()
 	strategy["cooldown_auth_delay_max_ms"] = cfg.CooldownAuthMax.Milliseconds()

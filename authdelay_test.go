@@ -215,9 +215,19 @@ func TestAdaptiveAuthenticationLearnsPeerOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
-	if got := s.authDelays.base(key, until, time.Now(), cfg); got != 4*time.Second {
-		t.Fatal("continued session did not increase delay", got)
+	if got := s.authDelays.base(key, until, time.Now(), cfg); got != 3*time.Second {
+		t.Fatal("channel open alone increased delay", got)
 	}
+	if _, _, err = c.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.authDelays.base(key, until, time.Now(), cfg); got != 3*time.Second {
+		t.Fatal("keepalive alone increased delay", got)
+	}
+	if err = session.Start("synthetic-command-not-executed"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool { return s.authDelays.base(key, until, time.Now(), cfg) == 4*time.Second })
 	if _, _, err = c.SendRequest("keepalive@openssh.com", true, nil); err != nil {
 		t.Fatal(err)
 	}

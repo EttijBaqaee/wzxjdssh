@@ -384,6 +384,7 @@ type clientConn struct {
 	firstAuthMethod     string
 	rejectedAuth        bool
 	peerAuthEnded       bool
+	sessionTrace        sessionTraceState
 	readTimedOut        atomic.Bool
 	peerClosed          atomic.Bool
 	delayStarted        time.Time     // Protected by server.mu.
@@ -515,7 +516,7 @@ func (s *Server) handle(c *clientConn) {
 				reason = "handshake_incomplete"
 			}
 		}
-		if !stopping && !c.readTimedOut.Load() && !c.lifetimeExpired.Load() && c.peerClosed.Load() && (c.peerDuringDelay.Load() || c.simulated.Load()) {
+		if !stopping && !c.readTimedOut.Load() && !c.lifetimeExpired.Load() && (c.peerClosed.Load() || c.peerAuthEnded) && (c.peerDuringDelay.Load() || c.simulated.Load()) {
 			c.learnAuthDelay(false)
 		}
 		if !stopping && c.simulated.Load() {
@@ -782,6 +783,7 @@ func (s *Server) handle(c *clientConn) {
 	c.simulated.Store(true)
 	_ = c.Conn.SetReadDeadline(time.Time{})
 	c.readDeadlineMu.Unlock()
+	c.sessionEvent("authenticated", "")
 	if s.store != nil {
 		if err := s.store.RecordSimulatedSession(c.recordID, c.markedUntil); err != nil {
 			s.storageError(err)
@@ -868,6 +870,8 @@ func (s *Server) Snapshot() map[string]any {
 	strategy["cooldown_auth_delay_step_ms"] = cfg.CooldownAuthStep.Milliseconds()
 	strategy["cooldown_auth_jitter_percent"] = cfg.CooldownAuthJitter
 	strategy["cooldown_auth_learning_persistent"] = false
+	strategy["cooldown_auth_success"] = "shell_or_exec_held"
+	strategy["cooldown_auth_success_hold_ms"] = cfg.Delay.Milliseconds()
 	strategy["parallel_connections"] = cfg.ParallelConnections
 	strategy["parallel_mode"] = "delayed_rejection"
 	strategy["network_jitter"] = networkDelayPolicy(cfg.Delay)

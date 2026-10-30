@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"io"
@@ -51,35 +52,45 @@ func (c *clientConn) networkPause() error {
 // Transport writes are serialized and delayed by clientConn.Write, including
 // channel confirmations, request replies and SSH flow-control packets.
 func (s *Server) serveSimulatedNetwork(c *clientConn, conn *ssh.ServerConn, channels <-chan ssh.NewChannel, requests <-chan *ssh.Request) {
-	defer conn.Close()
+	defer func() {
+		conn.Close()
+		err := conn.Wait()
+		c.peerAuthEnded = isPeerAuthEnd(err)
+		c.finishSessionTrace(err)
+	}()
 	var workers sync.WaitGroup
 	var sessionOpen atomic.Bool
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
 		for req := range requests {
-			c.learnAuthDelay(true)
+			c.sessionEvent("global_request", req.Type)
 			if req.WantReply {
 				_ = req.Reply(false, nil)
 			}
 		}
 	}()
 	for next := range channels {
-		c.learnAuthDelay(true)
+		c.sessionEvent("channel_requested", next.ChannelType())
 		if next.ChannelType() != "session" || len(next.ExtraData()) != 0 || !sessionOpen.CompareAndSwap(false, true) {
+			c.sessionEvent("channel_rejected", next.ChannelType())
 			_ = next.Reject(ssh.Prohibited, "administratively prohibited")
 			continue
 		}
 		channel, reqs, err := next.Accept()
 		if err != nil {
+			c.sessionEvent("channel_confirmation_failed", next.ChannelType())
 			sessionOpen.Store(false)
 			continue
 		}
+		c.sessionEvent("channel_confirmed", "session")
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			defer sessionOpen.Store(false)
 			var readers sync.WaitGroup
+			ctx, cancel := context.WithCancel(c.ctx)
+			defer cancel()
 			readers.Add(2)
 			for _, input := range []io.Reader{channel, channel.Stderr()} {
 				go func() { defer readers.Done(); _, _ = io.Copy(io.Discard, input) }()
@@ -87,7 +98,9 @@ func (s *Server) serveSimulatedNetwork(c *clientConn, conn *ssh.ServerConn, chan
 			started := false
 			pty := false
 			for req := range reqs {
+				c.sessionEvent("request_received", req.Type)
 				ok := false
+				startSession := false
 				switch req.Type {
 				case "env":
 					var env struct{ Name, Value string }
@@ -105,16 +118,32 @@ func (s *Server) serveSimulatedNetwork(c *clientConn, conn *ssh.ServerConn, chan
 					ok = pty && ssh.Unmarshal(req.Payload, &size) == nil
 				case "shell":
 					ok = !started && len(req.Payload) == 0
+					startSession = ok
 					started = started || ok
 				case "exec":
 					var command struct{ Command string }
 					ok = !started && ssh.Unmarshal(req.Payload, &command) == nil
+					startSession = ok
 					started = started || ok
 				}
 				if req.WantReply {
-					_ = req.Reply(ok, nil)
+					if err := req.Reply(ok, nil); err != nil {
+						c.sessionEvent("request_reply_failed", req.Type)
+						break
+					}
+				}
+				if ok {
+					c.sessionEvent("request_accepted", req.Type)
+				} else {
+					c.sessionEvent("request_rejected", req.Type)
+				}
+				if startSession {
+					readers.Add(1)
+					go c.learnHeldSession(ctx, &readers)
 				}
 			}
+			cancel()
+			c.sessionEvent("channel_closed", "session")
 			_ = channel.Close()
 			readers.Wait()
 		}()

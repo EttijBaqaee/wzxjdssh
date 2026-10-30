@@ -27,3 +27,5 @@ main{padding-top:24px;padding-bottom:20px}.page-intro{margin-bottom:12px}.tabs{m
 .overview-rankings .panel{height:auto;min-height:140px;display:flex;flex-direction:column;min-width:0;overflow:visible}.overview-rankings .panel>h2,.overview-rankings .panel>p{flex-shrink:0}
 .overview-rankings .rank-list{flex:none;min-height:0;overflow:visible;padding-right:0}
 @media(max-width:700px){.rank-group .rank-group-grid,.rank-group:first-child .rank-group-grid{grid-template-columns:minmax(0,1fr)}}
+
+#detail-session{margin-top:20px}.session-events{list-style:none;padding:0;margin:0}.session-events li{display:flex;gap:12px;padding:6px 0;border-bottom:1px solid var(--row-line);font-size:12px;overflow-wrap:anywhere}.session-events li>span:first-child{flex-shrink:0;min-width:64px}

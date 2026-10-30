@@ -24,23 +24,24 @@ type Store struct {
 	capacityDeleted atomic.Uint64
 }
 type ConnectionRecord struct {
-	ID            int64  `json:"id"`
-	Peer          string `json:"peer"`
-	IP            string `json:"ip"`
-	Mode          string `json:"mode"`
-	StartedAt     int64  `json:"started_at"`
-	EndedAt       *int64 `json:"ended_at"`
-	DurationMS    int64  `json:"duration_ms"`
-	DelayedMS     int64  `json:"delayed_ms"`
-	Status        string `json:"status"`
-	Reason        string `json:"reason"`
-	ClientVersion string `json:"client_version"`
-	Username      string `json:"username"`
-	BytesSent     int64  `json:"bytes_sent"`
-	BytesReceived int64  `json:"bytes_received"`
-	AuthAttempts  int64  `json:"auth_attempts"`
-	ClientMark    string `json:"client_mark"`
-	MarkExpiresAt int64  `json:"mark_expires_at"`
+	ID            int64         `json:"id"`
+	Peer          string        `json:"peer"`
+	IP            string        `json:"ip"`
+	Mode          string        `json:"mode"`
+	StartedAt     int64         `json:"started_at"`
+	EndedAt       *int64        `json:"ended_at"`
+	DurationMS    int64         `json:"duration_ms"`
+	DelayedMS     int64         `json:"delayed_ms"`
+	Status        string        `json:"status"`
+	Reason        string        `json:"reason"`
+	ClientVersion string        `json:"client_version"`
+	Username      string        `json:"username"`
+	BytesSent     int64         `json:"bytes_sent"`
+	BytesReceived int64         `json:"bytes_received"`
+	AuthAttempts  int64         `json:"auth_attempts"`
+	ClientMark    string        `json:"client_mark"`
+	MarkExpiresAt int64         `json:"mark_expires_at"`
+	Session       *SessionTrace `json:"session,omitempty"`
 }
 type AuthRecord struct {
 	ID           int64  `json:"id"`
@@ -150,6 +151,7 @@ func OpenStore(path string, parallelCooldown ...time.Duration) (*Store, error) {
 	CREATE TABLE IF NOT EXISTS client_cooldowns (ip TEXT NOT NULL,client_version TEXT NOT NULL,expires_at INTEGER NOT NULL,PRIMARY KEY(ip,client_version));
 	CREATE INDEX IF NOT EXISTS client_cooldowns_expiry ON client_cooldowns(expires_at);
 	CREATE TABLE IF NOT EXISTS connection_marks (connection_id INTEGER PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,label TEXT NOT NULL,expires_at INTEGER NOT NULL);
+	CREATE TABLE IF NOT EXISTS simulated_sessions (connection_id INTEGER PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,trace TEXT NOT NULL);
 	CREATE TABLE IF NOT EXISTS ip_slowdowns (ip TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
 	CREATE INDEX IF NOT EXISTS ip_slowdowns_expiry ON ip_slowdowns(expires_at);
 	CREATE TABLE IF NOT EXISTS ip_probes (ip TEXT PRIMARY KEY,streak INTEGER NOT NULL,expires_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
@@ -444,6 +446,10 @@ func (s *Store) List(ctx context.Context, f RecordFilter) (RecordPage, error) {
 }
 func (s *Store) Detail(ctx context.Context, id int64) (ConnectionRecord, []AuthRecord, error) {
 	c, err := scanConnection(s.db.QueryRowContext(ctx, `SELECT `+connectionColumns+` FROM connections WHERE id=?`, id))
+	if err != nil {
+		return c, nil, err
+	}
+	c.Session, err = s.loadSessionTrace(ctx, id)
 	if err != nil {
 		return c, nil, err
 	}

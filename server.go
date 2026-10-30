@@ -169,14 +169,27 @@ func (s *Server) Reload(next Config) error {
 // Each waiter resets its own timer after reload. No shared FIFO can block it.
 func (s *Server) pause(ctx context.Context) error {
 	started := time.Now()
+	var sampledConfig *Config
+	var delay time.Duration
 	for {
 		s.mu.Lock()
 		changed := s.changed
-		delay := s.cfg.Load().Delay
+		cfg := s.cfg.Load()
 		stopped := s.stopping
 		s.mu.Unlock()
 		if stopped {
 			return context.Canceled
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if cfg != sampledConfig {
+			var err error
+			delay, err = jitterDelay(cfg.Delay, cfg.DelayJitter)
+			if err != nil {
+				return err
+			}
+			sampledConfig = cfg
 		}
 		remaining := delay - time.Since(started)
 		if remaining <= 0 {
@@ -352,39 +365,40 @@ func (s *Server) acceptLoop(l net.Listener) {
 
 type clientConn struct {
 	net.Conn
-	server          *Server
-	cfg             Config
-	ip              string
-	started         time.Time
-	ctx             context.Context
-	cancel          context.CancelFunc
-	pending         atomic.Bool
-	authStage       atomic.Bool
-	bytesSent       atomic.Uint64
-	readDeadlineMu  sync.Mutex
-	writeMu         sync.Mutex
-	delaying        bool
-	recordID        int64
-	bytesReceived   atomic.Uint64
-	attemptCount    int
-	readTimedOut    atomic.Bool
-	peerClosed      atomic.Bool
-	delayStarted    time.Time     // Protected by server.mu.
-	delayed         time.Duration // Completed delay waits; protected by server.mu.
-	peerDuringDelay atomic.Bool
-	simulated       atomic.Bool
-	clientVersion   string
-	markedUntil     int64
-	authDelayTried  atomic.Bool
-	authLearned     atomic.Bool
-	probeUntil      int64
-	forceSlow       atomic.Bool
-	longLived       atomic.Bool
-	capacityEvicted atomic.Bool
-	lifetimeExpired atomic.Bool
-	lifetimeMu      sync.Mutex
-	lifetimeTimer   *time.Timer
-	done            chan struct{}
+	server              *Server
+	cfg                 Config
+	ip                  string
+	started             time.Time
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	pending             atomic.Bool
+	authStage           atomic.Bool
+	bytesSent           atomic.Uint64
+	readDeadlineMu      sync.Mutex
+	writeMu             sync.Mutex
+	delaying            bool
+	recordID            int64
+	bytesReceived       atomic.Uint64
+	attemptCount        int
+	readTimedOut        atomic.Bool
+	peerClosed          atomic.Bool
+	delayStarted        time.Time     // Protected by server.mu.
+	delayed             time.Duration // Completed delay waits; protected by server.mu.
+	peerDuringDelay     atomic.Bool
+	interruptedAuthWait atomic.Int64
+	simulated           atomic.Bool
+	clientVersion       string
+	markedUntil         int64
+	authDelayTried      atomic.Bool
+	authLearned         atomic.Bool
+	probeUntil          int64
+	forceSlow           atomic.Bool
+	longLived           atomic.Bool
+	capacityEvicted     atomic.Bool
+	lifetimeExpired     atomic.Bool
+	lifetimeMu          sync.Mutex
+	lifetimeTimer       *time.Timer
+	done                chan struct{}
 }
 
 func (c *clientConn) releasePending() {
@@ -504,14 +518,21 @@ func (s *Server) handle(c *clientConn) {
 			if status == "closed" {
 				status = "simulated_closed"
 			}
-		} else if !stopping && !c.capacityEvicted.Load() && c.peerDuringDelay.Load() && c.markedUntil == 0 && !c.forceSlow.Load() {
+		} else if !stopping && !c.capacityEvicted.Load() && c.peerDuringDelay.Load() && !c.forceSlow.Load() {
 			s.policyMu.Lock()
 			if !c.forceSlow.Load() {
-				status = "auth_interrupted"
-				reason = "peer_closed_during_auth_delay"
-				if s.store != nil && c.recordID != 0 && c.clientVersion != "" {
-					_, err := s.store.MarkInterruptedClient(c.recordID, c.ip, c.clientVersion, time.Now())
+				if c.markedUntil != 0 {
+					status, reason = "cooldown_auth_interrupted", "peer_closed_during_cooldown_auth_delay"
+				} else {
+					status, reason = "auth_interrupted", "peer_closed_during_auth_delay"
+				}
+				if c.markedUntil == 0 && s.store != nil && c.recordID != 0 && c.clientVersion != "" {
+					now := time.Now()
+					until, err := s.store.MarkInterruptedClient(c.recordID, c.ip, c.clientVersion, now)
 					s.storageError(err)
+					if err == nil {
+						s.authDelays.seed(authDelayKey{c.ip, c.clientVersion}, until, now, time.Duration(c.interruptedAuthWait.Load()), *s.cfg.Load())
+					}
 				}
 			}
 			s.policyMu.Unlock()
@@ -630,6 +651,7 @@ func (s *Server) handle(c *clientConn) {
 	}
 	denied := errors.New("permission denied")
 	delay := func(adaptive bool) error {
+		started := time.Now()
 		c.readDeadlineMu.Lock()
 		c.delaying = true
 		_ = c.Conn.SetReadDeadline(time.Time{})
@@ -645,6 +667,9 @@ func (s *Server) handle(c *clientConn) {
 		_ = c.Conn.SetReadDeadline(time.Now().Add(c.cfg.IdleTimeout))
 		c.readDeadlineMu.Unlock()
 		if err != nil {
+			if c.peerDuringDelay.Load() {
+				c.interruptedAuthWait.Store(int64(time.Since(started)))
+			}
 			return err
 		}
 		return denied
@@ -812,6 +837,11 @@ func (s *Server) Snapshot() map[string]any {
 	strategy["capacity_policy"] = "oldest_slow_on_demand"
 	strategy["parallel_window_ms"] = cfg.ParallelWindow.Milliseconds()
 	strategy["parallel_cooldown_ms"] = cfg.ParallelCooldown.Milliseconds()
+	low, high := jitterBounds(cfg.Delay, cfg.DelayJitter)
+	strategy["delay_jitter_percent"] = cfg.DelayJitter
+	strategy["delay_min_ms"] = low.Milliseconds()
+	strategy["delay_max_ms"] = high.Milliseconds()
+	strategy["cooldown_auth_initial_sample"] = "interrupted_wait_minus_step"
 	strategy["probe_failure_threshold"] = cfg.ProbeFailureThreshold
 	strategy["probe_cooldown_ms"] = cfg.ProbeCooldown.Milliseconds()
 	strategy["cooldown_auth_delay_ms"] = cfg.CooldownAuthDelay.Milliseconds()

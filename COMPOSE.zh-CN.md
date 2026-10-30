@@ -1,10 +1,10 @@
-# wzxjdssh 2.0.3： 编排使用文档
+# wzxjdssh 2.0.4： 编排使用文档
 
-配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.3`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
+配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.4`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
 
 创建编排、粘贴配套 YAML，首次部署会从 GHCR 拉取镜像。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
 
-离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.0.3`、`pull_policy` 改为 `never`。
+离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.0.4`、`pull_policy` 改为 `never`。
 
 ## 端口映射
 
@@ -49,6 +49,7 @@ WZXJDSSH_PORT=22
 | `WZXJDSSH_MAX_CLIENTS_PER_IP` | `64` | 每 IP 并发，0–100000；0 关闭限制 |
 | `WZXJDSSH_MAX_PENDING_HANDSHAKES` | `128` | 同时握手上限，1–100000 |
 | `WZXJDSSH_DELAY_MS` | `10000` | 每次主动拖延，1–86400000 毫秒 |
+| `WZXJDSSH_DELAY_JITTER_PERCENT` | `10` | 普通认证、横幅、并发慢速响应的随机扰动，0–50% |
 | `WZXJDSSH_PARALLEL_WINDOW_MS` | `60000` | 同 IP 重叠连接判定窗口，1–3600000 毫秒 |
 | `WZXJDSSH_PARALLEL_CONNECTIONS` | `2` | 触发并发慢速策略的重叠连接数，2–100000 |
 | `WZXJDSSH_PROBE_FAILURE_THRESHOLD` | `3` | 同 IP 连续握手未完成阈值，1–100000 |
@@ -110,7 +111,7 @@ WZXJDSSH_DATABASE_MAX_MB: "${WZXJDSSH_DATABASE_MAX_MB:-0}"
 
 密码榜统计密码认证和交互认证的单个密码回答。单 IP 拖延榜按该 IP 单次连接的最长实际拖延排序，同时显示累计拖延；包含在线和已结束连接，旧版没有记录的时长不做推算。
 
-默认同 IP 在 60 秒内出现至少两条重叠连接时，全部连接使用慢速策略，后续认证延迟拒绝；清除该 IP 的旧冷却标记，这组连接中途断开也不产生认证超时标记。已有仿真会话改为固定间隔响应。标记 IP 仍有连接时保持该策略；最后一条连接断开后，默认闲置 1 小时冷却，期间重连重新计时。冷却与并发判定窗口分开，窗口只用于首次识别。可在编排修改 `WZXJDSSH_PARALLEL_WINDOW_MS`、`WZXJDSSH_PARALLEL_CONNECTIONS` 和 `WZXJDSSH_PARALLEL_COOLDOWN_MS`。历史连接标签保留当时策略。`WZXJDSSH_MAX_AUTH_TRIES=0` 表示不限认证次数，慢速阶段不限总持续时间。
+默认同 IP 在 60 秒内出现至少两条重叠连接时，全部连接使用慢速策略，后续认证延迟拒绝；清除该 IP 的旧冷却标记，这组连接中途断开也不产生认证超时标记。已有仿真会话改为基准间隔叠加随机扰动的响应。标记 IP 仍有连接时保持该策略；最后一条连接断开后，默认闲置 1 小时冷却，期间重连重新计时。冷却与并发判定窗口分开，窗口只用于首次识别。可在编排修改 `WZXJDSSH_PARALLEL_WINDOW_MS`、`WZXJDSSH_PARALLEL_CONNECTIONS` 和 `WZXJDSSH_PARALLEL_COOLDOWN_MS`。历史连接标签保留当时策略。`WZXJDSSH_MAX_AUTH_TRIES=0` 表示不限认证次数，慢速阶段不限总持续时间。
 
 ### 握手探针冷却
 
@@ -176,7 +177,7 @@ environment:
 
 | 字段 | 当前值 | 用途 |
 | --- | --- | --- |
-| image | ghcr.io/ettijbaqaee/wzxjdssh:2.0.3 | 固定 GHCR 镜像版本 |
+| image | ghcr.io/ettijbaqaee/wzxjdssh:2.0.4 | 固定 GHCR 镜像版本 |
 | pull_policy | missing | 本地没有镜像时从 GHCR 拉取 |
 | container_name | wzxjdssh | 固定容器名；同一宿主机部署多份时需分别命名或移除此字段 |
 | restart | unless-stopped | 自动恢复容器；手动停止后保持停止 |
@@ -208,7 +209,7 @@ environment:
 
 若改用宿主机目录挂载 `/data`，该目录需允许容器 UID/GID `65532:65532` 读写。命名卷由 Docker 使用镜像内目录的属主和权限初始化。
 
-本次覆盖更新 2.0.3：已有同名镜像时，须在 1Panel 先拉取最新版，再重新创建容器。pull_policy: missing 不会刷新本机已有标签。保留原密钥和数据库卷。
+升级 2.0.4：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
 
 ## 自定义配置
 
@@ -247,7 +248,7 @@ volumes:
 
 默认 `LogLevel 0` 只输出重要事件。需要连接日志时将配置设为 `LogLevel 1`，或给服务增加 `command: ["-v"]`；调试使用 `LogLevel 2` 或 `command: ["-vv"]`。
 
-冷却重连的认证等待默认从 10 秒开始，按来源 IP 和完整客户端 SSH 标识在内存中学习：等待期间提前退出，后续基准减少 1 秒；收到认证后的请求或通道时，增加 1 秒，每连接只调整一次。基准范围为 3–15 秒，每次等待叠加约 ±10% 随机扰动，最终实际等待仍限制在 3–15 秒。并发慢速策略优先，服务停止和容量回收不会作为失败样本。学习结果不写入 SQLite，随该标签冷却到期废弃，容器重启后从初始值重新学习；标签本身仍沿用已有持久化机制。
+冷却重连的认证等待默认从 10 秒开始，按来源 IP 和完整客户端 SSH 标识在内存中学习：首次认证中断即按本次实际等待减去一步调整量初始化重连基准；后续等待期间提前退出，基准减少 1 秒；收到认证后的请求或通道时，增加 1 秒，每连接只调整一次。基准范围为 3–15 秒，每次等待叠加约 ±10% 随机扰动，最终实际等待仍限制在 3–15 秒。并发慢速策略优先，服务停止和容量回收不会作为失败样本。学习结果不写入 SQLite，随该标签冷却到期废弃，容器重启后从初始值重新学习；标签本身仍沿用已有持久化机制。
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
@@ -257,4 +258,6 @@ volumes:
 | `WZXJDSSH_COOLDOWN_AUTH_DELAY_STEP_MS` | `1000` | 每次学习调整量，1–60000 毫秒 |
 | `WZXJDSSH_COOLDOWN_AUTH_JITTER_PERCENT` | `10` | 随机扰动比例，0–50；最终仍钳在上下限 |
 
-观测页全部榜单纳入两列独立排布，按卡片实际高度将后续榜单放到较短列，不再等待另一列结束；卡片间距统一 12 像素，手机单列。
+观测页按认证尝试、拖延统计、来源情况分组；用户名、密码、认证方式相邻，宽屏三组分栏、手机单列，间距 12 像素。
+
+普通认证、慢速横幅及并发慢速响应每次按 `Delay` 独立随机等待。`WZXJDSSH_DELAY_JITTER_PERCENT` 默认 `10`，范围 0–50；默认 10 秒基准对应 9–11 秒。仿真网络会话保持独立随机长短响应。超时与冷却截止按原配置计算。冷却重连中断以专用状态和关闭原因记录，不续期。

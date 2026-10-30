@@ -1,16 +1,36 @@
 package main
 
 import (
-	"crypto/rand"
-	"math/big"
 	"sync"
 	"time"
 )
 
 type authDelayKey struct{ ip, version string }
 type authDelayEntry struct {
-	base  time.Duration
-	until int64
+	base   time.Duration
+	until  int64
+	seeded bool
+}
+
+// Seed once per cooldown, using only the interrupted authentication wait.
+// One learning step is reserved as headroom before the observed departure.
+func (l *authDelayLearning) seed(key authDelayKey, until int64, now time.Time, elapsed time.Duration, cfg Config) {
+	if elapsed <= 0 || until <= now.UnixMilli() {
+		return
+	}
+	l.base(key, until, now, cfg)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, ok := l.entries[key]
+	if !ok || entry.until != until || entry.seeded {
+		return
+	}
+	value := elapsed - cfg.CooldownAuthStep
+	if value < entry.base {
+		entry.base = clampAuthDelay(value, cfg)
+	}
+	entry.seeded = true
+	l.entries[key] = entry
 }
 
 // Learning is process-local and belongs to one fixed cooldown generation.
@@ -87,11 +107,7 @@ func jitterAuthDelay(base time.Duration, cfg Config) (time.Duration, error) {
 	if spread == 0 {
 		return base, nil
 	}
-	n, err := rand.Int(rand.Reader, big.NewInt(int64(2*spread)+1))
-	if err != nil {
-		return 0, err
-	}
-	return clampAuthDelay(base-spread+time.Duration(n.Int64()), cfg), nil
+	return randomDelay(clampAuthDelay(base-spread, cfg), clampAuthDelay(base+spread, cfg))
 }
 
 func (c *clientConn) learnAuthDelay(caught bool) {

@@ -19,6 +19,7 @@ type Config struct {
 	BindFamily            int
 	Mode                  string
 	Delay                 time.Duration
+	DelayJitter           int
 	CooldownAuthDelay     time.Duration
 	CooldownAuthMin       time.Duration
 	CooldownAuthMax       time.Duration
@@ -45,7 +46,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Port: 2222, Mode: "ssh", Delay: 10 * time.Second, MaxLineLength: 32,
+	return Config{Port: 2222, Mode: "ssh", Delay: 10 * time.Second, DelayJitter: 10, MaxLineLength: 32,
 		CooldownAuthDelay: 10 * time.Second, CooldownAuthMin: 3 * time.Second, CooldownAuthMax: 15 * time.Second, CooldownAuthStep: time.Second, CooldownAuthJitter: 10,
 		MaxClients: 4096, MaxClientsPerIP: 64, ConnectionsPerMinute: 2048,
 		MaxPendingHandshakes: 128, MaxAuthTries: 0, ParallelWindow: time.Minute, ParallelCooldown: time.Hour, ParallelConnections: 2, HandshakeTimeout: 20 * time.Second,
@@ -62,6 +63,7 @@ func (c Config) Validate() error {
 		{c.BindFamily == 0 || c.BindFamily == 4 || c.BindFamily == 6, "BindFamily must be exactly 0, 4 or 6"},
 		{c.Mode == "ssh" || c.Mode == "banner", "Mode must be ssh or banner"},
 		{c.Delay >= time.Millisecond && c.Delay <= 24*time.Hour, "Delay must be 1..86400000 milliseconds"},
+		{c.DelayJitter >= 0 && c.DelayJitter <= 50, "DelayJitterPercent must be 0..50"},
 		{c.CooldownAuthMin >= 3*time.Second && c.CooldownAuthMax <= time.Minute && c.CooldownAuthMin <= c.CooldownAuthDelay && c.CooldownAuthDelay <= c.CooldownAuthMax, "CooldownAuthDelayMin/Delay/Max must satisfy 3000 <= min <= initial <= max <= 60000 milliseconds"},
 		{c.CooldownAuthStep >= time.Millisecond && c.CooldownAuthStep <= time.Minute, "CooldownAuthDelayStep must be 1..60000 milliseconds"},
 		{c.CooldownAuthJitter >= 0 && c.CooldownAuthJitter <= 50, "CooldownAuthJitterPercent must be 0..50"},
@@ -166,6 +168,8 @@ func parseConfig(r io.Reader) (Config, error) {
 			c.Mode = value
 		case "Delay":
 			setDuration(&c.Delay)
+		case "DelayJitterPercent":
+			setInt(&c.DelayJitter)
 		case "CooldownAuthDelay":
 			setDuration(&c.CooldownAuthDelay)
 		case "CooldownAuthDelayMin":
@@ -253,6 +257,7 @@ func configEnvironment(c Config, lookup func(string) string) (Config, error) {
 		{"MAX_AUTH_TRIES", &c.MaxAuthTries}, {"PARALLEL_CONNECTIONS", &c.ParallelConnections},
 		{"MAX_LINE_LENGTH", &c.MaxLineLength}, {"LOG_LEVEL", &c.LogLevel},
 		{"PROBE_FAILURE_THRESHOLD", &c.ProbeFailureThreshold},
+		{"DELAY_JITTER_PERCENT", &c.DelayJitter},
 		{"COOLDOWN_AUTH_JITTER_PERCENT", &c.CooldownAuthJitter},
 	} {
 		key := "WZXJDSSH_" + option.name

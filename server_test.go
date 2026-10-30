@@ -126,6 +126,7 @@ func testConfig(t *testing.T) Config {
 	c.BindFamily = 4
 	c.HostKeyDirectory = suiteKeyDirectory
 	c.Delay = 40 * time.Millisecond
+	c.DelayJitter = 0
 	c.CooldownAuthDelay = 3 * time.Second
 	c.CooldownAuthMin = 3 * time.Second
 	c.CooldownAuthMax = 3 * time.Second

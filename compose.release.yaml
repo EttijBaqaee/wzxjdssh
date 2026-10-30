@@ -1,6 +1,6 @@
 services:
   wzxjdssh:
-    image: ghcr.io/ettijbaqaee/wzxjdssh:2.0.3
+    image: ghcr.io/ettijbaqaee/wzxjdssh:2.0.4
     pull_policy: missing
     container_name: wzxjdssh
     restart: unless-stopped
@@ -19,6 +19,7 @@ services:
       WZXJDSSH_MAX_CLIENTS_PER_IP: "${WZXJDSSH_MAX_CLIENTS_PER_IP:-64}"
       WZXJDSSH_MAX_PENDING_HANDSHAKES: "${WZXJDSSH_MAX_PENDING_HANDSHAKES:-128}"
       WZXJDSSH_DELAY_MS: "${WZXJDSSH_DELAY_MS:-10000}"
+      WZXJDSSH_DELAY_JITTER_PERCENT: "${WZXJDSSH_DELAY_JITTER_PERCENT:-10}"
       WZXJDSSH_COOLDOWN_AUTH_DELAY_MS: "${WZXJDSSH_COOLDOWN_AUTH_DELAY_MS:-10000}"
       WZXJDSSH_COOLDOWN_AUTH_DELAY_MIN_MS: "${WZXJDSSH_COOLDOWN_AUTH_DELAY_MIN_MS:-3000}"
       WZXJDSSH_COOLDOWN_AUTH_DELAY_MAX_MS: "${WZXJDSSH_COOLDOWN_AUTH_DELAY_MAX_MS:-15000}"

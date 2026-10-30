@@ -19,3 +19,6 @@ main{padding-top:24px;padding-bottom:20px}.page-intro{margin-bottom:12px}.tabs{m
 @media(max-width:700px){main{padding-top:18px}.page-intro{margin-bottom:10px}.update-control{margin:10px 0}.cards{gap:10px}.overview-rankings .panel{padding:14px}.trend svg{height:160px}.strategy-fields{gap:12px}}
 
 .rank-column:empty{display:none}
+
+/* Related rankings remain in three compact, independent groups. */
+.overview-rankings{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:start}.rank-group{min-width:0}.rank-group-title{font-size:12px;color:var(--muted);margin:0 0 6px;padding-left:2px}.rank-group-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}.rank-group-grid .panel{min-width:0}.rank-group-grid .panel:has(#rank-methods){padding-top:12px;padding-bottom:12px}@media(min-width:701px) and (max-width:1100px){.overview-rankings{grid-template-columns:repeat(2,minmax(0,1fr))}.rank-group:last-child{grid-column:1/-1}.rank-group:last-child .rank-group-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:700px){.overview-rankings{grid-template-columns:minmax(0,1fr)}}

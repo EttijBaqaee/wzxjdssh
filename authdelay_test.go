@@ -1,12 +1,102 @@
 package main
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 )
+
+func TestFirstInterruptedWaitSeedsCurrentCooldown(t *testing.T) {
+	cfg := DefaultConfig()
+	now := time.Now()
+	until := now.Add(time.Hour).UnixMilli()
+	key := authDelayKey{"2001:db8::4", "SSH-2.0-first-sample"}
+	for _, tc := range []struct{ elapsed, want time.Duration }{
+		{2800 * time.Millisecond, 3 * time.Second}, {5800 * time.Millisecond, 4800 * time.Millisecond},
+		{20 * time.Second, 10 * time.Second},
+	} {
+		var learning authDelayLearning
+		learning.seed(key, until, now, tc.elapsed, cfg)
+		if got := learning.base(key, until, now, cfg); got != tc.want {
+			t.Fatal(tc, got)
+		}
+		learning.observe(key, until, now, true, cfg)
+		learning.seed(key, until, now, time.Millisecond, cfg)
+		if got := learning.base(key, until, now, cfg); got != clampAuthDelay(tc.want+cfg.CooldownAuthStep, cfg) {
+			t.Fatal("sample overwritten in same cooldown", got)
+		}
+		later := now.Add(time.Hour)
+		learning.seed(key, later.Add(time.Hour).UnixMilli(), later, 7*time.Second, cfg)
+		if got := learning.base(key, later.Add(time.Hour).UnixMilli(), later, cfg); got != 6*time.Second {
+			t.Fatal("new cooldown not sampled independently", got)
+		}
+	}
+}
+
+func TestInitialAndReturningAuthenticationInterruptions(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Delay = 10 * time.Second
+	cfg.CooldownAuthDelay = 10 * time.Second
+	cfg.CooldownAuthMax = 15 * time.Second
+	store := testStore(t)
+	s, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.store = store
+	if err = s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	version := "SSH-2.0-initial-sample"
+	clientCfg := &ssh.ClientConfig{User: "initial-sample", ClientVersion: version, Auth: []ssh.AuthMethod{ssh.Password("sample-only")}, HostKeyCallback: ssh.InsecureIgnoreHostKey()}
+	for i := 0; i < 2; i++ {
+		raw, err := net.Dial("tcp", address(cfg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			c, _, _, _ := ssh.NewClientConn(raw, address(cfg), clientCfg)
+			if c != nil {
+				c.Close()
+			}
+			close(done)
+		}()
+		eventually(t, func() bool { return s.Snapshot()["live"].(LiveStats).DelayingConnections == 1 })
+		raw.Close()
+		<-done
+		eventually(t, func() bool {
+			if s.stats.active.Load() != 0 {
+				return false
+			}
+			page, err := store.List(context.Background(), RecordFilter{})
+			return err == nil && len(page.Items) == i+1 && page.Items[0].EndedAt != nil
+		})
+		page, err := store.List(context.Background(), RecordFilter{})
+		if err != nil || len(page.Items) != i+1 {
+			t.Fatal(page, err)
+		}
+		record, attempts, err := store.Detail(context.Background(), page.Items[0].ID)
+		wantStatus, wantReason := "auth_interrupted", "peer_closed_during_auth_delay"
+		if i == 1 {
+			wantStatus, wantReason = "cooldown_auth_interrupted", "peer_closed_during_cooldown_auth_delay"
+		}
+		if err != nil || record.Status != wantStatus || record.Reason != wantReason || len(attempts) != 1 || attempts[0].Result != "interrupted" {
+			t.Fatal("interruption incorrectly classified", record, attempts, err)
+		}
+		until, err := store.ClientCooldown("127.0.0.1", version, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.authDelays.base(authDelayKey{"127.0.0.1", version}, until, time.Now(), cfg); got != 3*time.Second {
+			t.Fatal("initial interruption not seeded", got)
+		}
+	}
+}
 
 func TestAuthDelayLearningBoundsExpiryAndMemoryOnly(t *testing.T) {
 	cfg := DefaultConfig()

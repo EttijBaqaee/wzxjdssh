@@ -41,6 +41,7 @@ type ConnectionRecord struct {
 	AuthAttempts  int64         `json:"auth_attempts"`
 	ClientMark    string        `json:"client_mark"`
 	MarkExpiresAt int64         `json:"mark_expires_at"`
+	Liveness      *PeerLiveness `json:"liveness,omitempty"`
 	Session       *SessionTrace `json:"session,omitempty"`
 }
 type AuthRecord struct {

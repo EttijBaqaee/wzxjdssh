@@ -20,6 +20,8 @@ type SessionTrace struct {
 	AuthenticatedAt int64          `json:"authenticated_at"`
 	EndedAt         int64          `json:"ended_at,omitempty"`
 	PostAuthMS      int64          `json:"post_auth_ms"`
+	LastReceivedAt  int64          `json:"last_received_at,omitempty"`
+	LastVerifiedAt  int64          `json:"last_verified_at,omitempty"`
 	LastStage       string         `json:"last_stage"`
 	EndError        string         `json:"end_error,omitempty"`
 	Events          []SessionEvent `json:"events"`
@@ -75,6 +77,7 @@ func (c *clientConn) sessionEvent(stage, kind string) {
 		state.started = now
 		state.trace.AuthenticatedAt = now.UnixMilli()
 	}
+	state.trace.LastReceivedAt, state.trace.LastVerifiedAt = c.lastReceivedAt.Load(), c.peer.verifiedAt.Load()
 	state.trace.LastStage = stage
 	state.trace.PostAuthMS = time.Since(state.started).Milliseconds()
 	if len(state.trace.Events) >= 32 {
@@ -102,6 +105,7 @@ func (c *clientConn) finishSessionTrace(err error) {
 	if state.started.IsZero() {
 		return
 	}
+	state.trace.LastReceivedAt, state.trace.LastVerifiedAt = c.lastReceivedAt.Load(), c.peer.verifiedAt.Load()
 	state.trace.EndedAt = time.Now().UnixMilli()
 	state.trace.PostAuthMS = time.Since(state.started).Milliseconds()
 	if err != nil {
@@ -124,8 +128,7 @@ func (c *clientConn) learnHeldSession(ctx context.Context, done *sync.WaitGroup)
 	select {
 	case <-timer.C:
 		if ctx.Err() == nil && c.ctx.Err() == nil {
-			c.sessionEvent("session_held", "")
-			c.learnAuthDelay(true)
+			c.verifyHeldSession(ctx)
 		}
 	case <-ctx.Done():
 	}

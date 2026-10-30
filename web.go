@@ -29,6 +29,8 @@ type Web struct {
 	cfg        RuntimeConfig
 	store      *Store
 	snapshot   func() map[string]any
+	emergency  *Server
+	liveDetail func(int64) (LiveRecordSnapshot, bool)
 	secret     [32]byte
 	password   [32]byte
 	server     *http.Server
@@ -44,11 +46,14 @@ type loginFailures struct {
 	Until time.Time
 }
 
-func NewWeb(c RuntimeConfig, s *Store, snapshot func() map[string]any) (*Web, error) {
+func NewWeb(c RuntimeConfig, s *Store, snapshot func() map[string]any, detail ...func(int64) (LiveRecordSnapshot, bool)) (*Web, error) {
 	if len(c.AdminPassword) < 12 {
 		return nil, errors.New("admin password must be at least 12 bytes")
 	}
 	w := &Web{cfg: c, store: s, snapshot: snapshot, errors: make(chan error, 1), failures: map[string]loginFailures{}, password: sha256.Sum256([]byte(c.AdminPassword))}
+	if len(detail) > 0 {
+		w.liveDetail = detail[0]
+	}
 	w.cfg.AdminPassword = ""
 	minutes, err := s.WebIdleMinutes()
 	if err != nil {
@@ -200,6 +205,8 @@ func (w *Web) Handler() http.Handler {
 		}
 		sendJSON(rw, 200, map[string]any{"username": w.cfg.AdminUsername, "retention_days": w.cfg.RetentionDays, "version": version, "idle_timeout_seconds": int(w.idleTimeout().Seconds())})
 	})
+	mux.HandleFunc("GET /api/emergency", w.protected(w.emergencyState))
+	mux.HandleFunc("POST /api/emergency", w.protected(w.emergencyAction))
 	mux.HandleFunc("GET /api/settings", w.protected(w.settings))
 	mux.HandleFunc("POST /api/settings", w.protected(w.settings))
 	mux.HandleFunc("GET /api/stats", w.protected(w.stats))
@@ -468,6 +475,22 @@ func (w *Web) detail(rw http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		sendJSON(rw, 500, map[string]string{"error": "无法读取详情"})
 		return
+	}
+	if c.EndedAt == nil && w.liveDetail != nil {
+		if live, ok := w.liveDetail(id); ok {
+			c.DurationMS, c.DelayedMS = live.DurationMS, live.DelayedMS
+			c.BytesSent, c.BytesReceived = live.BytesSent, live.BytesReceived
+			c.Liveness = live.Liveness
+			if live.Session != nil {
+				c.Session = live.Session
+			}
+		} else {
+			c, a, err = w.store.Detail(r.Context(), id)
+			if err != nil {
+				sendJSON(rw, 500, map[string]string{"error": "无法读取连接结束记录"})
+				return
+			}
+		}
 	}
 	sendJSON(rw, 200, map[string]any{"connection": c, "attempts": a})
 }

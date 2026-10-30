@@ -42,6 +42,9 @@ type Config struct {
 	HandshakeTimeout         time.Duration
 	IdleTimeout              time.Duration
 	WriteTimeout             time.Duration
+	SSHKeepaliveInterval     time.Duration
+	SSHKeepaliveTimeout      time.Duration
+	SSHKeepaliveCountMax     int
 	MaxConnectionTime        time.Duration
 	HostKeyDirectory         string
 	ServerVersion            string
@@ -54,6 +57,7 @@ func DefaultConfig() Config {
 		MaxClients: 4096, MaxClientsPerIP: 64, ConnectionsPerMinute: 2048,
 		MaxPendingHandshakes: 128, MaxAuthTries: 0, ParallelWindow: time.Minute, ParallelCooldown: time.Hour, ParallelConnections: 2, HandshakeTimeout: 20 * time.Second,
 		IdleTimeout: 2 * time.Minute, WriteTimeout: 5 * time.Second, MaxConnectionTime: 0, ProbeCooldown: 15 * time.Minute, ProbeFailureThreshold: 3,
+		SSHKeepaliveInterval: time.Minute, SSHKeepaliveTimeout: 30 * time.Second, SSHKeepaliveCountMax: 3,
 		SingleAuthRetryThreshold: 3, SingleAuthRetryWindow: 15 * time.Minute, SingleAuthRetryCooldown: time.Hour,
 		HostKeyDirectory: "/data", ServerVersion: "SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4", LogLevel: 0}
 }
@@ -89,6 +93,9 @@ func (c Config) Validate() error {
 		{c.IdleTimeout >= time.Millisecond && c.IdleTimeout <= 24*time.Hour, "IdleTimeout must be 1..86400000 milliseconds"},
 		{c.WriteTimeout >= time.Millisecond && c.WriteTimeout <= time.Minute, "WriteTimeout must be 1..60000 milliseconds"},
 		{c.MaxConnectionTime >= 0 && c.MaxConnectionTime <= 7*24*time.Hour, "MaxConnectionTime must be 0..604800000 milliseconds (0 means unlimited)"},
+		{c.SSHKeepaliveInterval >= time.Millisecond && c.SSHKeepaliveInterval <= time.Hour, "SSHKeepaliveInterval must be 1..3600000 milliseconds"},
+		{c.SSHKeepaliveTimeout >= time.Millisecond && c.SSHKeepaliveTimeout <= time.Hour, "SSHKeepaliveTimeout must be 1..3600000 milliseconds"},
+		{c.SSHKeepaliveCountMax >= 1 && c.SSHKeepaliveCountMax <= 10, "SSHKeepaliveCountMax must be 1..10"},
 		{c.HostKeyDirectory != "", "HostKeyDirectory cannot be empty"},
 		{c.LogLevel >= 0 && c.LogLevel <= 2, "LogLevel must be 0..2"},
 		{strings.HasPrefix(c.ServerVersion, "SSH-2.0-") && len(c.ServerVersion) > 8 && len(c.ServerVersion) <= 253, "ServerVersion must be an SSH-2.0 identification of at most 253 bytes"},
@@ -219,6 +226,12 @@ func parseConfig(r io.Reader) (Config, error) {
 			setDuration(&c.HandshakeTimeout)
 		case "IdleTimeout":
 			setDuration(&c.IdleTimeout)
+		case "SSHKeepaliveInterval":
+			setDuration(&c.SSHKeepaliveInterval)
+		case "SSHKeepaliveTimeout":
+			setDuration(&c.SSHKeepaliveTimeout)
+		case "SSHKeepaliveCountMax":
+			setInt(&c.SSHKeepaliveCountMax)
 		case "WriteTimeout":
 			setDuration(&c.WriteTimeout)
 		case "MaxConnectionTime":
@@ -267,7 +280,7 @@ func configEnvironment(c Config, lookup func(string) string) (Config, error) {
 	}{
 		{"MAX_CLIENTS", &c.MaxClients}, {"MAX_CLIENTS_PER_IP", &c.MaxClientsPerIP},
 		{"CONNECTIONS_PER_MINUTE", &c.ConnectionsPerMinute}, {"MAX_PENDING_HANDSHAKES", &c.MaxPendingHandshakes},
-		{"MAX_AUTH_TRIES", &c.MaxAuthTries}, {"PARALLEL_CONNECTIONS", &c.ParallelConnections},
+		{"SSH_KEEPALIVE_COUNT_MAX", &c.SSHKeepaliveCountMax}, {"MAX_AUTH_TRIES", &c.MaxAuthTries}, {"PARALLEL_CONNECTIONS", &c.ParallelConnections},
 		{"MAX_LINE_LENGTH", &c.MaxLineLength}, {"LOG_LEVEL", &c.LogLevel},
 		{"PROBE_FAILURE_THRESHOLD", &c.ProbeFailureThreshold},
 		{"SINGLE_AUTH_RETRY_THRESHOLD", &c.SingleAuthRetryThreshold},
@@ -289,6 +302,7 @@ func configEnvironment(c Config, lookup func(string) string) (Config, error) {
 	}{
 		{"DELAY_MS", &c.Delay}, {"PARALLEL_WINDOW_MS", &c.ParallelWindow},
 		{"PARALLEL_COOLDOWN_MS", &c.ParallelCooldown}, {"HANDSHAKE_TIMEOUT_MS", &c.HandshakeTimeout},
+		{"SSH_KEEPALIVE_INTERVAL_MS", &c.SSHKeepaliveInterval}, {"SSH_KEEPALIVE_TIMEOUT_MS", &c.SSHKeepaliveTimeout},
 		{"IDLE_TIMEOUT_MS", &c.IdleTimeout}, {"WRITE_TIMEOUT_MS", &c.WriteTimeout},
 		{"MAX_CONNECTION_TIME_MS", &c.MaxConnectionTime},
 		{"PROBE_COOLDOWN_MS", &c.ProbeCooldown},

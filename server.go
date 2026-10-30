@@ -18,16 +18,17 @@ import (
 )
 
 type counters struct {
-	accepted     atomic.Uint64
-	rejected     atomic.Uint64
-	acceptErrors atomic.Uint64
-	closed       atomic.Uint64
-	evicted      atomic.Uint64
-	bytesSent    atomic.Uint64
-	authAttempts atomic.Uint64
-	active       atomic.Int64
-	pending      atomic.Int64
-	closedNanos  atomic.Int64
+	emergencyRejected atomic.Uint64
+	accepted          atomic.Uint64
+	rejected          atomic.Uint64
+	acceptErrors      atomic.Uint64
+	closed            atomic.Uint64
+	evicted           atomic.Uint64
+	bytesSent         atomic.Uint64
+	authAttempts      atomic.Uint64
+	active            atomic.Int64
+	pending           atomic.Int64
+	closedNanos       atomic.Int64
 }
 
 type rateBucket struct {
@@ -36,26 +37,28 @@ type rateBucket struct {
 }
 
 type Server struct {
-	mu            sync.Mutex
-	reloadMu      sync.Mutex
-	policyMu      sync.Mutex // Serializes persisted parallel-policy and cooldown decisions.
-	logMu         sync.Mutex
-	cfg           atomic.Pointer[Config]
-	listener      net.Listener
-	clients       map[*clientConn]struct{}
-	ipCount       map[string]int
-	buckets       map[string]rateBucket
-	keys          []ssh.Signer
-	changed       chan struct{}
-	stopping      bool
-	wg            sync.WaitGroup
-	stats         counters
-	logWriter     io.Writer
-	lastPrune     time.Time
-	store         *Store
-	storageErrors atomic.Uint64
-	authDelays    authDelayLearning
-	singleAuth    singleAuthRetries
+	mu             sync.Mutex
+	emergencyMu    sync.Mutex
+	emergencyUntil time.Time
+	reloadMu       sync.Mutex
+	policyMu       sync.Mutex // Serializes persisted parallel-policy and cooldown decisions.
+	logMu          sync.Mutex
+	cfg            atomic.Pointer[Config]
+	listener       net.Listener
+	clients        map[*clientConn]struct{}
+	ipCount        map[string]int
+	buckets        map[string]rateBucket
+	keys           []ssh.Signer
+	changed        chan struct{}
+	stopping       bool
+	wg             sync.WaitGroup
+	stats          counters
+	logWriter      io.Writer
+	lastPrune      time.Time
+	store          *Store
+	storageErrors  atomic.Uint64
+	authDelays     authDelayLearning
+	singleAuth     singleAuthRetries
 }
 
 func NewServer(c Config, logWriter io.Writer) (*Server, error) {
@@ -211,6 +214,9 @@ func (s *Server) pause(ctx context.Context) error {
 
 func (s *Server) admit(ip string, c Config) string {
 	// Caller holds s.mu. Bound memory independently of source-address cardinality.
+	if time.Now().Before(s.emergencyUntil) {
+		return "emergency_drop"
+	}
 	if s.stopping {
 		return "shutdown"
 	}
@@ -278,6 +284,17 @@ func (s *Server) acceptLoop(l net.Listener) {
 			continue
 		}
 		backoff = 0
+		s.mu.Lock()
+		held := time.Now().Before(s.emergencyUntil)
+		if held {
+			s.stats.emergencyRejected.Add(1)
+		}
+		s.mu.Unlock()
+		if held {
+			s.stats.rejected.Add(1)
+			raw.Close()
+			continue
+		}
 		ip, _, _ := net.SplitHostPort(raw.RemoteAddr().String())
 		if parsed := net.ParseIP(ip); parsed != nil {
 			ip = parsed.String()
@@ -310,7 +327,7 @@ func (s *Server) acceptLoop(l net.Listener) {
 			s.mu.Unlock()
 			raw.Close()
 			s.log(2, "rejected", map[string]any{"peer": raw.RemoteAddr().String(), "reason": reason})
-			if s.store != nil {
+			if s.store != nil && reason != "emergency_drop" {
 				s.storageError(s.store.Reject(raw.RemoteAddr().String(), ip, cfg.Mode, reason))
 			}
 			continue
@@ -380,6 +397,10 @@ type clientConn struct {
 	delaying            bool
 	recordID            int64
 	bytesReceived       atomic.Uint64
+	lastReceivedAt      atomic.Int64
+	peer                peerWatch
+	peerUnresponsive    atomic.Bool
+	emergencyEvicted    atomic.Bool
 	attemptCount        int
 	firstAuthMethod     string
 	rejectedAuth        bool
@@ -421,6 +442,7 @@ func (c *clientConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		c.bytesReceived.Add(uint64(n))
+		c.lastReceivedAt.Store(time.Now().UnixMilli())
 	}
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {
@@ -516,7 +538,7 @@ func (s *Server) handle(c *clientConn) {
 				reason = "handshake_incomplete"
 			}
 		}
-		if !stopping && !c.readTimedOut.Load() && !c.lifetimeExpired.Load() && (c.peerClosed.Load() || c.peerAuthEnded) && (c.peerDuringDelay.Load() || c.simulated.Load()) {
+		if !stopping && !c.readTimedOut.Load() && !c.lifetimeExpired.Load() && !c.peerUnresponsive.Load() && !c.emergencyEvicted.Load() && (c.peerClosed.Load() || c.peerAuthEnded) && (c.peerDuringDelay.Load() || c.simulated.Load()) {
 			c.learnAuthDelay(false)
 		}
 		if !stopping && c.simulated.Load() {
@@ -544,6 +566,12 @@ func (s *Server) handle(c *clientConn) {
 		}
 		if !stopping && c.capacityEvicted.Load() {
 			status, reason = "capacity_evicted", "connection_capacity"
+		}
+		if !stopping && c.emergencyEvicted.Load() {
+			status, reason = "interrupted", "emergency_drop"
+		}
+		if !stopping && c.peerUnresponsive.Load() && !c.capacityEvicted.Load() {
+			status, reason = "simulated_closed", "ssh_keepalive_timeout"
 		}
 		if c.probeUntil > 0 {
 			status, reason = "probe_blocked", "probe_cooldown"
@@ -854,6 +882,9 @@ func (s *Server) Snapshot() map[string]any {
 	strategy["slow_connection_lifetime"] = "unlimited"
 	strategy["max_connection_time_ms"] = int64(0)
 	strategy["pre_transport_max_time_ms"] = cfg.MaxConnectionTime.Milliseconds()
+	strategy["ssh_keepalive_interval_ms"] = cfg.SSHKeepaliveInterval.Milliseconds()
+	strategy["ssh_keepalive_timeout_ms"] = cfg.SSHKeepaliveTimeout.Milliseconds()
+	strategy["ssh_keepalive_count_max"] = cfg.SSHKeepaliveCountMax
 	strategy["capacity_policy"] = "oldest_slow_on_demand"
 	strategy["parallel_window_ms"] = cfg.ParallelWindow.Milliseconds()
 	strategy["parallel_cooldown_ms"] = cfg.ParallelCooldown.Milliseconds()
@@ -873,7 +904,7 @@ func (s *Server) Snapshot() map[string]any {
 	strategy["cooldown_auth_delay_step_ms"] = cfg.CooldownAuthStep.Milliseconds()
 	strategy["cooldown_auth_jitter_percent"] = cfg.CooldownAuthJitter
 	strategy["cooldown_auth_learning_persistent"] = false
-	strategy["cooldown_auth_success"] = "shell_or_exec_held"
+	strategy["cooldown_auth_success"] = "shell_or_exec_held_and_ssh_response"
 	strategy["cooldown_auth_success_hold_ms"] = cfg.Delay.Milliseconds()
 	strategy["parallel_connections"] = cfg.ParallelConnections
 	strategy["parallel_mode"] = "delayed_rejection"

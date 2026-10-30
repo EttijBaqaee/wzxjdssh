@@ -208,11 +208,12 @@ func run() int {
 	defer func() { cancel(); maintenance.Wait() }()
 	var webErrors <-chan error
 	if opts.WebEnabled {
-		web, err := NewWeb(opts, store, s.Snapshot)
+		web, err := NewWeb(opts, store, s.Snapshot, s.ConnectionDetail)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "web configuration failed")
 			return 2
 		}
+		web.emergency = s
 		if err = web.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, "web listen:", err)
 			return 1

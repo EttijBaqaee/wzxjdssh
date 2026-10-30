@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -56,10 +57,16 @@ func (s *Server) serveSimulatedNetwork(c *clientConn, conn *ssh.ServerConn, chan
 		conn.Close()
 		err := conn.Wait()
 		c.peerAuthEnded = isPeerAuthEnd(err)
+		if c.peerUnresponsive.Load() {
+			err = errors.New("ssh_keepalive_timeout: peer did not answer SSH liveness request")
+		}
 		c.finishSessionTrace(err)
 	}()
 	var workers sync.WaitGroup
 	var sessionOpen atomic.Bool
+	c.peer.wake = make(chan struct{}, 1)
+	workers.Add(1)
+	go func() { defer workers.Done(); c.watchPeer(conn) }()
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
@@ -148,5 +155,7 @@ func (s *Server) serveSimulatedNetwork(c *clientConn, conn *ssh.ServerConn, chan
 			readers.Wait()
 		}()
 	}
+	c.cancel() // Release outstanding keepalive and channel readers after transport ends.
+	c.Conn.Close()
 	workers.Wait()
 }

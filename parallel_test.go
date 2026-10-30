@@ -68,6 +68,9 @@ func TestParallelIPOverridesCooldownAndDoesNotGetTimeoutMark(t *testing.T) {
 	<-done
 	first.Close()
 	eventually(t, func() bool { return s.stats.active.Load() == 0 })
+	if until, err := store.ParallelUntil("127.0.0.1", time.Now()); err != nil || until < time.Now().Add(cfg.ParallelCooldown-time.Second).UnixMilli() {
+		t.Fatal("disconnect did not renew idle cooldown", until, err)
+	}
 	if until, err := store.ClientCooldown("127.0.0.1", version, time.Now()); err != nil || until != 0 {
 		t.Fatal("parallel became timeout client", until, err)
 	}
@@ -91,5 +94,73 @@ func TestUnlimitedAuthenticationSurvivesMoreThanSixFailures(t *testing.T) {
 	_, err := ssh.Dial("tcp", address(c), &ssh.ClientConfig{User: "retry", Auth: []ssh.AuthMethod{ssh.RetryableAuthMethod(ssh.PasswordCallback(func() (string, error) { attempts++; return "retry-password", nil }), 12)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: time.Second})
 	if err == nil || attempts != 12 || s.stats.authAttempts.Load() < 12 {
 		t.Fatal("authentication capped early", attempts, s.stats.authAttempts.Load(), err)
+	}
+}
+
+func TestParallelPolicyRemainsWhileOnlineAndExpiresWhenIdle(t *testing.T) {
+	s := testStore(t)
+	now := time.Now()
+	ip := "192.0.2.45"
+	id := mustStart(t, s, ip, now.Add(-2*time.Hour))
+	if err := s.ForceParallelIP(ip, now.Add(-time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if until, err := s.ParallelUntil(ip, now); err != nil || until == 0 {
+		t.Fatal("online policy expired", until, err)
+	}
+	if err := s.Prune(now, 90); err != nil {
+		t.Fatal(err)
+	}
+	if until, err := s.ParallelUntil(ip, now); err != nil || until == 0 {
+		t.Fatal("cleanup removed online policy", until, err)
+	}
+	if err := s.ForceParallelIP(ip, now.Add(time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finish(id, 2*time.Hour, "closed", "", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if until, err := s.ParallelUntil(ip, now.Add(59*time.Minute)); err != nil || until == 0 {
+		t.Fatal("idle policy lost early", until, err)
+	}
+	if until, err := s.ParallelUntil(ip, now.Add(time.Hour)); err != nil || until != 0 {
+		t.Fatal("idle policy did not expire", until, err)
+	}
+	// A returning client renews the idle deadline without needing overlap again.
+	srv := &Server{store: s}
+	c := &clientConn{ip: ip, cfg: DefaultConfig()}
+	if err := srv.applyParallelPolicy(c); err != nil || !c.forceSlow.Load() {
+		t.Fatal("return did not inherit", err)
+	}
+	if until, err := s.ParallelUntil(ip, time.Now()); err != nil || until < time.Now().Add(59*time.Minute).UnixMilli() {
+		t.Fatal("return did not renew", until, err)
+	}
+}
+
+func TestParallelPolicyCrashRecovery(t *testing.T) {
+	path := t.TempDir() + "/records.sqlite"
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip := "192.0.2.46"
+	mustStart(t, s, ip, time.Now().Add(-2*time.Hour))
+	if err = s.ForceParallelIP(ip, time.Now().Add(-time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = OpenStore(path, 2*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if until, err := s.ParallelUntil(ip, time.Now()); err != nil || until < time.Now().Add(119*time.Minute).UnixMilli() {
+		t.Fatal("recovery lost cooldown", until, err)
+	}
+	if err = s.Prune(time.Now(), 90); err != nil {
+		t.Fatal(err)
+	}
+	if until, err := s.ParallelUntil(ip, time.Now()); err != nil || until == 0 {
+		t.Fatal("recovered policy removed", until, err)
 	}
 }

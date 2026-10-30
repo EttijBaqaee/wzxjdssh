@@ -25,7 +25,7 @@ func simulatedTestServer(t *testing.T, cfg Config) (*Server, *Store, *ssh.Client
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Stop)
-	c, err := ssh.Dial("tcp", address(cfg), &ssh.ClientConfig{User: "virtual-user", ClientVersion: version, Auth: []ssh.AuthMethod{ssh.Password("virtual-password")}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: time.Second})
+	c, err := ssh.Dial("tcp", address(cfg), &ssh.ClientConfig{User: "virtual-user", ClientVersion: version, Auth: []ssh.AuthMethod{ssh.Password("virtual-password")}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 10 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

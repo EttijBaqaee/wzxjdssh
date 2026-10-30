@@ -54,6 +54,7 @@ type Server struct {
 	lastPrune     time.Time
 	store         *Store
 	storageErrors atomic.Uint64
+	authDelays    authDelayLearning
 }
 
 func NewServer(c Config, logWriter io.Writer) (*Server, error) {
@@ -267,11 +268,27 @@ func (s *Server) acceptLoop(l net.Listener) {
 		if parsed := net.ParseIP(ip); parsed != nil {
 			ip = parsed.String()
 		}
+		var probeUntil int64
+		if s.store != nil && s.cfg.Load().Mode == "ssh" {
+			probeUntil, err = s.store.ProbeCooldown(ip, time.Now())
+			if err != nil {
+				s.storageError(err)
+				raw.Close()
+				continue
+			}
+		}
 		s.mu.Lock()
 		cfg := *s.cfg.Load()
 		reason := s.admit(ip, cfg)
 		var victims []*clientConn
-		if reason == "" {
+		if reason == "" && probeUntil > 0 {
+			if len(s.clients) >= cfg.MaxClients {
+				reason = "max_clients"
+			} else if cfg.MaxClientsPerIP > 0 && s.ipCount[ip] >= cfg.MaxClientsPerIP {
+				reason = "per_ip_limit"
+			}
+		}
+		if reason == "" && probeUntil == 0 {
 			victims, reason = s.capacityVictimsLocked(ip, cfg)
 		}
 		if reason != "" {
@@ -305,22 +322,28 @@ func (s *Server) acceptLoop(l net.Listener) {
 			}
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		c := &clientConn{Conn: raw, server: s, cfg: cfg, ip: ip, started: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{})}
-		c.startLifetime()
-		if cfg.Mode == "ssh" {
+		c := &clientConn{Conn: raw, server: s, cfg: cfg, ip: ip, started: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), probeUntil: probeUntil}
+		if probeUntil == 0 {
+			c.startLifetime()
+		}
+		if cfg.Mode == "ssh" && probeUntil == 0 {
 			c.pending.Store(true)
 			s.stats.pending.Add(1)
 		}
 		s.clients[c] = struct{}{}
-		s.detectParallelLocked(c)
+		if probeUntil == 0 {
+			s.detectParallelLocked(c)
+		}
 		s.ipCount[ip]++
 		s.stats.active.Add(1)
 		s.stats.accepted.Add(1)
 		s.wg.Add(1)
 		s.mu.Unlock()
-		if err := s.applyParallelPolicy(c); err != nil {
-			s.storageError(err)
-			c.cancel()
+		if probeUntil == 0 {
+			if err := s.applyParallelPolicy(c); err != nil {
+				s.storageError(err)
+				c.cancel()
+			}
 		}
 		s.log(1, "accepted", map[string]any{"peer": raw.RemoteAddr().String(), "mode": cfg.Mode, "active": s.stats.active.Load()})
 		go s.handle(c)
@@ -352,6 +375,9 @@ type clientConn struct {
 	simulated       atomic.Bool
 	clientVersion   string
 	markedUntil     int64
+	authDelayTried  atomic.Bool
+	authLearned     atomic.Bool
+	probeUntil      int64
 	forceSlow       atomic.Bool
 	longLived       atomic.Bool
 	capacityEvicted atomic.Bool
@@ -471,6 +497,9 @@ func (s *Server) handle(c *clientConn) {
 				reason = "handshake_incomplete"
 			}
 		}
+		if !stopping && !c.readTimedOut.Load() && !c.lifetimeExpired.Load() && c.peerClosed.Load() && (c.peerDuringDelay.Load() || c.simulated.Load()) {
+			c.learnAuthDelay(false)
+		}
 		if !stopping && c.simulated.Load() {
 			if status == "closed" {
 				status = "simulated_closed"
@@ -489,6 +518,9 @@ func (s *Server) handle(c *clientConn) {
 		}
 		if !stopping && c.capacityEvicted.Load() {
 			status, reason = "capacity_evicted", "connection_capacity"
+		}
+		if c.probeUntil > 0 {
+			status, reason = "probe_blocked", "probe_cooldown"
 		}
 		c.cancel()
 		c.Conn.Close()
@@ -509,7 +541,16 @@ func (s *Server) handle(c *clientConn) {
 		s.stats.closedNanos.Add(int64(duration))
 		s.stats.closed.Add(1)
 		if s.store != nil && c.recordID != 0 {
+			s.policyMu.Lock()
+			if c.forceSlow.Load() {
+				s.storageError(s.store.ForceParallelIP(c.ip, time.Now().Add(c.cfg.ParallelCooldown).UnixMilli()))
+			}
 			s.storageError(s.store.finish(c.recordID, duration, status, reason, c.bytesSent.Load(), c.bytesReceived.Load(), delayed))
+			if !stopping && c.probeUntil == 0 && c.cfg.Mode == "ssh" {
+				_, err := s.store.ProbeResult(c.recordID, c.ip, reason == "handshake_incomplete", time.Now(), c.cfg)
+				s.storageError(err)
+			}
+			s.policyMu.Unlock()
 		}
 		s.log(1, "closed", map[string]any{"peer": c.RemoteAddr().String(), "duration_ms": duration.Milliseconds(), "bytes_sent": c.bytesSent.Load()})
 	}()
@@ -529,6 +570,13 @@ func (s *Server) handle(c *clientConn) {
 				return
 			}
 		}
+		if c.probeUntil > 0 {
+			s.storageError(s.store.MarkProbeConnection(id, c.probeUntil))
+		}
+	}
+	if c.probeUntil > 0 {
+		s.discardProbe(c)
+		return
 	}
 	if c.cfg.Mode == "banner" {
 		s.serveBanner(c)
@@ -553,6 +601,8 @@ func (s *Server) handle(c *clientConn) {
 		if s.store != nil {
 			s.policyMu.Lock()
 			defer s.policyMu.Unlock()
+			_, err := s.store.ProbeResult(0, c.ip, false, time.Now(), c.cfg)
+			s.storageError(err)
 			if c.forceSlow.Load() {
 				s.storageError(s.store.MarkParallelConnection(c.recordID))
 			} else {
@@ -579,12 +629,17 @@ func (s *Server) handle(c *clientConn) {
 		s.log(2, "ssh_transport_ready", map[string]any{"peer": c.RemoteAddr().String(), "client_version": string(meta.ClientVersion())})
 	}
 	denied := errors.New("permission denied")
-	delay := func() error {
+	delay := func(adaptive bool) error {
 		c.readDeadlineMu.Lock()
 		c.delaying = true
 		_ = c.Conn.SetReadDeadline(time.Time{})
 		c.readDeadlineMu.Unlock()
-		err := c.pause()
+		var err error
+		if adaptive {
+			err = c.cooldownAuthPause()
+		} else {
+			err = c.pause()
+		}
 		c.readDeadlineMu.Lock()
 		c.delaying = false
 		_ = c.Conn.SetReadDeadline(time.Now().Add(c.cfg.IdleTimeout))
@@ -625,9 +680,17 @@ func (s *Server) handle(c *clientConn) {
 	}
 	respond := func(id int64) error {
 		if !c.forceSlow.Load() && c.markedUntil > time.Now().UnixMilli() {
-			return nil
+			// A marked client still pays an adaptive, randomly perturbed delay.
+			// Recheck policy after waiting: overlap or expiry may now require denial.
+			if err := delay(true); !errors.Is(err, denied) {
+				return finishAttempt(id, err)
+			}
+			if !c.forceSlow.Load() && c.markedUntil > time.Now().UnixMilli() {
+				return nil
+			}
+			return finishAttempt(id, denied)
 		}
-		return finishAttempt(id, delay())
+		return finishAttempt(id, delay(false))
 	}
 	cfg.PasswordCallback = func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 		id, err := record(meta, "password", password, nil)
@@ -748,6 +811,15 @@ func (s *Server) Snapshot() map[string]any {
 	strategy["pre_transport_max_time_ms"] = cfg.MaxConnectionTime.Milliseconds()
 	strategy["capacity_policy"] = "oldest_slow_on_demand"
 	strategy["parallel_window_ms"] = cfg.ParallelWindow.Milliseconds()
+	strategy["parallel_cooldown_ms"] = cfg.ParallelCooldown.Milliseconds()
+	strategy["probe_failure_threshold"] = cfg.ProbeFailureThreshold
+	strategy["probe_cooldown_ms"] = cfg.ProbeCooldown.Milliseconds()
+	strategy["cooldown_auth_delay_ms"] = cfg.CooldownAuthDelay.Milliseconds()
+	strategy["cooldown_auth_delay_min_ms"] = cfg.CooldownAuthMin.Milliseconds()
+	strategy["cooldown_auth_delay_max_ms"] = cfg.CooldownAuthMax.Milliseconds()
+	strategy["cooldown_auth_delay_step_ms"] = cfg.CooldownAuthStep.Milliseconds()
+	strategy["cooldown_auth_jitter_percent"] = cfg.CooldownAuthJitter
+	strategy["cooldown_auth_learning_persistent"] = false
 	strategy["parallel_connections"] = cfg.ParallelConnections
 	strategy["parallel_mode"] = "delayed_rejection"
 	strategy["network_jitter"] = networkDelayPolicy(cfg.Delay)

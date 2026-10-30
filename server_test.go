@@ -126,6 +126,10 @@ func testConfig(t *testing.T) Config {
 	c.BindFamily = 4
 	c.HostKeyDirectory = suiteKeyDirectory
 	c.Delay = 40 * time.Millisecond
+	c.CooldownAuthDelay = 3 * time.Second
+	c.CooldownAuthMin = 3 * time.Second
+	c.CooldownAuthMax = 3 * time.Second
+	c.CooldownAuthJitter = 0
 	c.IdleTimeout = time.Second
 	c.HandshakeTimeout = time.Second
 	c.MaxConnectionTime = 5 * time.Second

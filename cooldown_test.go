@@ -80,7 +80,7 @@ func TestInterruptedClientGetsSimulatedNetworkUntilCooldown(t *testing.T) {
 	}
 	defer s.Stop()
 	version := "SSH-2.0-cooldown-client"
-	clientCfg := &ssh.ClientConfig{User: "cooldown-user", ClientVersion: version, Auth: []ssh.AuthMethod{ssh.Password("cooldown-password")}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: time.Second}
+	clientCfg := &ssh.ClientConfig{User: "cooldown-user", ClientVersion: version, Auth: []ssh.AuthMethod{ssh.Password("cooldown-password")}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 10 * time.Second}
 	raw, err := net.Dial("tcp", address(cfg))
 	if err != nil {
 		t.Fatal(err)
@@ -117,8 +117,8 @@ func TestInterruptedClientGetsSimulatedNetworkUntilCooldown(t *testing.T) {
 		if err != nil {
 			t.Fatal("marked client did not receive auth success", err)
 		}
-		if time.Since(started) >= cfg.Delay {
-			t.Fatal("marked client unnecessarily delayed")
+		if time.Since(started) < cfg.CooldownAuthMin {
+			t.Fatal("marked client bypassed authentication delay")
 		}
 		started = time.Now()
 		session, err := c.NewSession()

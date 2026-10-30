@@ -14,33 +14,42 @@ import (
 
 // Config is immutable after publication. Durations use Go's monotonic timers.
 type Config struct {
-	Port                 int
-	BindAddress          string
-	BindFamily           int
-	Mode                 string
-	Delay                time.Duration
-	MaxLineLength        int
-	MaxClients           int
-	MaxClientsPerIP      int
-	ConnectionsPerMinute int
-	MaxPendingHandshakes int
-	MaxAuthTries         int
-	ParallelWindow       time.Duration
-	ParallelConnections  int
-	HandshakeTimeout     time.Duration
-	IdleTimeout          time.Duration
-	WriteTimeout         time.Duration
-	MaxConnectionTime    time.Duration
-	HostKeyDirectory     string
-	ServerVersion        string
-	LogLevel             int
+	Port                  int
+	BindAddress           string
+	BindFamily            int
+	Mode                  string
+	Delay                 time.Duration
+	CooldownAuthDelay     time.Duration
+	CooldownAuthMin       time.Duration
+	CooldownAuthMax       time.Duration
+	CooldownAuthStep      time.Duration
+	CooldownAuthJitter    int
+	MaxLineLength         int
+	MaxClients            int
+	MaxClientsPerIP       int
+	ConnectionsPerMinute  int
+	MaxPendingHandshakes  int
+	MaxAuthTries          int
+	ParallelWindow        time.Duration
+	ParallelCooldown      time.Duration
+	ProbeCooldown         time.Duration
+	ProbeFailureThreshold int
+	ParallelConnections   int
+	HandshakeTimeout      time.Duration
+	IdleTimeout           time.Duration
+	WriteTimeout          time.Duration
+	MaxConnectionTime     time.Duration
+	HostKeyDirectory      string
+	ServerVersion         string
+	LogLevel              int
 }
 
 func DefaultConfig() Config {
 	return Config{Port: 2222, Mode: "ssh", Delay: 10 * time.Second, MaxLineLength: 32,
-		MaxClients: 4096, MaxClientsPerIP: 64, ConnectionsPerMinute: 120,
-		MaxPendingHandshakes: 128, MaxAuthTries: 0, ParallelWindow: time.Minute, ParallelConnections: 2, HandshakeTimeout: 20 * time.Second,
-		IdleTimeout: 2 * time.Minute, WriteTimeout: 5 * time.Second, MaxConnectionTime: 0,
+		CooldownAuthDelay: 10 * time.Second, CooldownAuthMin: 3 * time.Second, CooldownAuthMax: 15 * time.Second, CooldownAuthStep: time.Second, CooldownAuthJitter: 10,
+		MaxClients: 4096, MaxClientsPerIP: 64, ConnectionsPerMinute: 2048,
+		MaxPendingHandshakes: 128, MaxAuthTries: 0, ParallelWindow: time.Minute, ParallelCooldown: time.Hour, ParallelConnections: 2, HandshakeTimeout: 20 * time.Second,
+		IdleTimeout: 2 * time.Minute, WriteTimeout: 5 * time.Second, MaxConnectionTime: 0, ProbeCooldown: 15 * time.Minute, ProbeFailureThreshold: 3,
 		HostKeyDirectory: "/data", ServerVersion: "SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4", LogLevel: 0}
 }
 
@@ -53,6 +62,9 @@ func (c Config) Validate() error {
 		{c.BindFamily == 0 || c.BindFamily == 4 || c.BindFamily == 6, "BindFamily must be exactly 0, 4 or 6"},
 		{c.Mode == "ssh" || c.Mode == "banner", "Mode must be ssh or banner"},
 		{c.Delay >= time.Millisecond && c.Delay <= 24*time.Hour, "Delay must be 1..86400000 milliseconds"},
+		{c.CooldownAuthMin >= 3*time.Second && c.CooldownAuthMax <= time.Minute && c.CooldownAuthMin <= c.CooldownAuthDelay && c.CooldownAuthDelay <= c.CooldownAuthMax, "CooldownAuthDelayMin/Delay/Max must satisfy 3000 <= min <= initial <= max <= 60000 milliseconds"},
+		{c.CooldownAuthStep >= time.Millisecond && c.CooldownAuthStep <= time.Minute, "CooldownAuthDelayStep must be 1..60000 milliseconds"},
+		{c.CooldownAuthJitter >= 0 && c.CooldownAuthJitter <= 50, "CooldownAuthJitterPercent must be 0..50"},
 		{c.MaxLineLength >= 3 && c.MaxLineLength <= 255, "MaxLineLength must be 3..255"},
 		{c.MaxClients >= 1 && c.MaxClients <= 2147483647, "MaxClients must be 1..2147483647"},
 		{c.MaxClientsPerIP >= 0 && c.MaxClientsPerIP <= 100000, "MaxClientsPerIP must be 0..100000"},
@@ -60,6 +72,9 @@ func (c Config) Validate() error {
 		{c.MaxPendingHandshakes >= 1 && c.MaxPendingHandshakes <= 100000, "MaxPendingHandshakes must be 1..100000"},
 		{c.MaxAuthTries >= 0 && c.MaxAuthTries <= 1000000, "MaxAuthTries must be 0..1000000 (0 means unlimited)"},
 		{c.ParallelWindow >= time.Millisecond && c.ParallelWindow <= time.Hour, "ParallelWindow must be 1..3600000 milliseconds"},
+		{c.ParallelCooldown >= time.Millisecond && c.ParallelCooldown <= 7*24*time.Hour, "ParallelCooldown must be 1..604800000 milliseconds"},
+		{c.ProbeCooldown >= time.Millisecond && c.ProbeCooldown <= 24*time.Hour, "ProbeCooldown must be 1..86400000 milliseconds"},
+		{c.ProbeFailureThreshold >= 1 && c.ProbeFailureThreshold <= 100000, "ProbeFailureThreshold must be 1..100000"},
 		{c.ParallelConnections >= 2 && c.ParallelConnections <= 100000, "ParallelConnections must be 2..100000"},
 		{c.HandshakeTimeout >= time.Millisecond && c.HandshakeTimeout <= time.Hour, "HandshakeTimeout must be 1..3600000 milliseconds"},
 		{c.IdleTimeout >= time.Millisecond && c.IdleTimeout <= 24*time.Hour, "IdleTimeout must be 1..86400000 milliseconds"},
@@ -151,6 +166,16 @@ func parseConfig(r io.Reader) (Config, error) {
 			c.Mode = value
 		case "Delay":
 			setDuration(&c.Delay)
+		case "CooldownAuthDelay":
+			setDuration(&c.CooldownAuthDelay)
+		case "CooldownAuthDelayMin":
+			setDuration(&c.CooldownAuthMin)
+		case "CooldownAuthDelayMax":
+			setDuration(&c.CooldownAuthMax)
+		case "CooldownAuthDelayStep":
+			setDuration(&c.CooldownAuthStep)
+		case "CooldownAuthJitterPercent":
+			setInt(&c.CooldownAuthJitter)
 		case "MaxLineLength":
 			setInt(&c.MaxLineLength)
 		case "MaxClients":
@@ -165,6 +190,12 @@ func parseConfig(r io.Reader) (Config, error) {
 			setInt(&c.MaxAuthTries)
 		case "ParallelWindow":
 			setDuration(&c.ParallelWindow)
+		case "ParallelCooldown":
+			setDuration(&c.ParallelCooldown)
+		case "ProbeCooldown":
+			setDuration(&c.ProbeCooldown)
+		case "ProbeFailureThreshold":
+			setInt(&c.ProbeFailureThreshold)
 		case "ParallelConnections":
 			setInt(&c.ParallelConnections)
 		case "HandshakeTimeout":
@@ -208,4 +239,59 @@ func LoadConfig(path string) (Config, error) {
 	}
 	defer f.Close()
 	return parseConfig(f)
+}
+
+// Nonempty environment values override the file; CLI flags are applied last.
+// WZXJDSSH_PORT remains the Compose host-port interpolation variable.
+func configEnvironment(c Config, lookup func(string) string) (Config, error) {
+	for _, option := range []struct {
+		name   string
+		target *int
+	}{
+		{"MAX_CLIENTS", &c.MaxClients}, {"MAX_CLIENTS_PER_IP", &c.MaxClientsPerIP},
+		{"CONNECTIONS_PER_MINUTE", &c.ConnectionsPerMinute}, {"MAX_PENDING_HANDSHAKES", &c.MaxPendingHandshakes},
+		{"MAX_AUTH_TRIES", &c.MaxAuthTries}, {"PARALLEL_CONNECTIONS", &c.ParallelConnections},
+		{"MAX_LINE_LENGTH", &c.MaxLineLength}, {"LOG_LEVEL", &c.LogLevel},
+		{"PROBE_FAILURE_THRESHOLD", &c.ProbeFailureThreshold},
+		{"COOLDOWN_AUTH_JITTER_PERCENT", &c.CooldownAuthJitter},
+	} {
+		key := "WZXJDSSH_" + option.name
+		if value := lookup(key); value != "" {
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				return c, fmt.Errorf("invalid %s: expected integer", key)
+			}
+			*option.target = n
+		}
+	}
+	for _, option := range []struct {
+		name   string
+		target *time.Duration
+	}{
+		{"DELAY_MS", &c.Delay}, {"PARALLEL_WINDOW_MS", &c.ParallelWindow},
+		{"PARALLEL_COOLDOWN_MS", &c.ParallelCooldown}, {"HANDSHAKE_TIMEOUT_MS", &c.HandshakeTimeout},
+		{"IDLE_TIMEOUT_MS", &c.IdleTimeout}, {"WRITE_TIMEOUT_MS", &c.WriteTimeout},
+		{"MAX_CONNECTION_TIME_MS", &c.MaxConnectionTime},
+		{"PROBE_COOLDOWN_MS", &c.ProbeCooldown},
+		{"COOLDOWN_AUTH_DELAY_MS", &c.CooldownAuthDelay},
+		{"COOLDOWN_AUTH_DELAY_MIN_MS", &c.CooldownAuthMin},
+		{"COOLDOWN_AUTH_DELAY_MAX_MS", &c.CooldownAuthMax},
+		{"COOLDOWN_AUTH_DELAY_STEP_MS", &c.CooldownAuthStep},
+	} {
+		key := "WZXJDSSH_" + option.name
+		if value := lookup(key); value != "" {
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || n < 0 || n > 604800000 {
+				return c, fmt.Errorf("invalid %s: milliseconds outside 0..604800000", key)
+			}
+			*option.target = time.Duration(n) * time.Millisecond
+		}
+	}
+	if value := lookup("WZXJDSSH_SERVER_VERSION"); value != "" {
+		c.ServerVersion = value
+	}
+	if value := lookup("WZXJDSSH_MODE"); value != "" {
+		c.Mode = value
+	}
+	return c, c.Validate()
 }

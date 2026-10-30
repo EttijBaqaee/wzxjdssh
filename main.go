@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -9,11 +8,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 var version = "development"
@@ -64,12 +63,13 @@ func health(c Config) error {
 		return nil
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
-	line, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		return err
+	verified := false
+	sshConn, _, _, err := ssh.NewClientConn(conn, net.JoinHostPort(host, fmt.Sprint(c.Port)), &ssh.ClientConfig{User: "wzxjdssh-health", Timeout: time.Second, HostKeyCallback: func(string, net.Addr, ssh.PublicKey) error { verified = true; return nil }})
+	if sshConn != nil {
+		sshConn.Close()
 	}
-	if !strings.HasPrefix(line, "SSH-2.0-") {
-		return fmt.Errorf("invalid SSH identification")
+	if !verified {
+		return fmt.Errorf("SSH health handshake failed: %v", err)
 	}
 	return nil
 }
@@ -116,14 +116,9 @@ func run() int {
 		if err != nil {
 			return c, err
 		}
-		if serverVersion := os.Getenv("WZXJDSSH_SERVER_VERSION"); serverVersion != "" {
-			c.ServerVersion = serverVersion
-		}
-		if value := os.Getenv("WZXJDSSH_MAX_AUTH_TRIES"); value != "" {
-			c.MaxAuthTries, err = strconv.Atoi(value)
-			if err != nil {
-				return c, fmt.Errorf("invalid WZXJDSSH_MAX_AUTH_TRIES")
-			}
+		c, err = configEnvironment(c, os.Getenv)
+		if err != nil {
+			return c, err
 		}
 		if specified["p"] {
 			c.Port = port
@@ -178,7 +173,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "runtime configuration:", err)
 		return 2
 	}
-	store, err := OpenStore(opts.DatabasePath)
+	store, err := OpenStore(opts.DatabasePath, c.ParallelCooldown)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "database startup failed")
 		return 1

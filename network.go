@@ -58,12 +58,14 @@ func (s *Server) serveSimulatedNetwork(c *clientConn, conn *ssh.ServerConn, chan
 	go func() {
 		defer workers.Done()
 		for req := range requests {
+			c.learnAuthDelay(true)
 			if req.WantReply {
 				_ = req.Reply(false, nil)
 			}
 		}
 	}()
 	for next := range channels {
+		c.learnAuthDelay(true)
 		if next.ChannelType() != "session" || len(next.ExtraData()) != 0 || !sessionOpen.CompareAndSwap(false, true) {
 			_ = next.Reject(ssh.Prohibited, "administratively prohibited")
 			continue

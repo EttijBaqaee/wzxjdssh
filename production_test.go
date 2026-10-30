@@ -77,7 +77,12 @@ func TestProductionWebAndPersistence(t *testing.T) {
 		Connection ConnectionRecord `json:"connection"`
 		Attempts   []AuthRecord     `json:"attempts"`
 	}
-	get(fmt.Sprint("api/connections/", records.Items[0].ID), &detail)
+	// The peer sees authentication failure before the server's deferred close
+	// finishes writing byte counters and the final connection status.
+	eventually(t, func() bool {
+		get(fmt.Sprint("api/connections/", records.Items[0].ID), &detail)
+		return detail.Connection.EndedAt != nil && detail.Connection.BytesReceived > 0
+	})
 	if len(detail.Attempts) != 1 || detail.Attempts[0].Username != "v2-production-probe" || detail.Attempts[0].Credential != "production-test-password" || detail.Connection.BytesReceived == 0 {
 		t.Fatal("production SSH record incomplete", detail)
 	}

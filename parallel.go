@@ -14,7 +14,7 @@ func (s *Server) detectParallelLocked(c *clientConn) {
 	}
 	count, inherited := 0, false
 	for other := range s.clients {
-		if other.ip != c.ip || other.ctx.Err() != nil {
+		if other.ip != c.ip || other.ctx.Err() != nil || other.probeUntil > 0 {
 			continue
 		}
 		if c.started.Sub(other.started) <= c.cfg.ParallelWindow {
@@ -26,7 +26,7 @@ func (s *Server) detectParallelLocked(c *clientConn) {
 		return
 	}
 	for other := range s.clients {
-		if other.ip == c.ip {
+		if other.ip == c.ip && other.probeUntil == 0 {
 			other.forceSlow.Store(true)
 		}
 	}
@@ -48,12 +48,21 @@ func (s *Server) applyParallelPolicy(c *clientConn) error {
 	if !c.forceSlow.Load() {
 		return nil
 	}
-	return s.store.ForceParallelIP(c.ip, time.Now().Add(c.cfg.ParallelWindow).UnixMilli())
+	s.mu.Lock()
+	for other := range s.clients {
+		if other.ip == c.ip && other.probeUntil == 0 {
+			other.forceSlow.Store(true)
+		}
+	}
+	s.mu.Unlock()
+	return s.store.ForceParallelIP(c.ip, time.Now().Add(c.cfg.ParallelCooldown).UnixMilli())
 }
 
 func (s *Store) ParallelUntil(ip string, now time.Time) (int64, error) {
 	var until int64
-	err := s.db.QueryRow(`SELECT expires_at FROM ip_slowdowns WHERE ip=? AND expires_at>?`, ip, now.UnixMilli()).Scan(&until)
+	// An online marked connection keeps the policy active even after its
+	// admission deadline. The final disconnect renews the idle deadline.
+	err := s.db.QueryRow(`SELECT MAX(expires_at,?) FROM ip_slowdowns WHERE ip=? AND (expires_at>? OR EXISTS(SELECT 1 FROM connections c JOIN connection_marks m ON m.connection_id=c.id WHERE c.ip=ip_slowdowns.ip AND c.ended_at IS NULL AND m.label='parallel_slow'))`, now.UnixMilli()+1, ip, now.UnixMilli()).Scan(&until)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -75,7 +84,7 @@ func (s *Store) ForceParallelIP(ip string, until int64) error {
 	if _, err = tx.Exec(`DELETE FROM client_cooldowns WHERE ip=?`, ip); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`INSERT OR REPLACE INTO connection_marks(connection_id,label,expires_at) SELECT id,'parallel_slow',0 FROM connections WHERE ip=? AND ended_at IS NULL`, ip); err != nil {
+	if _, err = tx.Exec(`INSERT OR REPLACE INTO connection_marks(connection_id,label,expires_at) SELECT id,'parallel_slow',0 FROM connections WHERE ip=? AND ended_at IS NULL AND NOT EXISTS(SELECT 1 FROM connection_marks m WHERE m.connection_id=connections.id AND m.label='handshake_probe')`, ip); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {

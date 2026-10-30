@@ -89,7 +89,7 @@ type StoredStats struct {
 	Daily       []DailyPoint `json:"daily"`
 }
 
-func OpenStore(path string) (*Store, error) {
+func OpenStore(path string, parallelCooldown ...time.Duration) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("database path cannot be empty")
 	}
@@ -152,6 +152,8 @@ func OpenStore(path string) (*Store, error) {
 	CREATE TABLE IF NOT EXISTS connection_marks (connection_id INTEGER PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,label TEXT NOT NULL,expires_at INTEGER NOT NULL);
 	CREATE TABLE IF NOT EXISTS ip_slowdowns (ip TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
 	CREATE INDEX IF NOT EXISTS ip_slowdowns_expiry ON ip_slowdowns(expires_at);
+	CREATE TABLE IF NOT EXISTS ip_probes (ip TEXT PRIMARY KEY,streak INTEGER NOT NULL,expires_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+	CREATE INDEX IF NOT EXISTS ip_probes_expiry ON ip_probes(expires_at);
 	`
 	if _, err = db.Exec(schema); err != nil {
 		db.Close()
@@ -195,6 +197,15 @@ func OpenStore(path string) (*Store, error) {
 	}
 	// A previous process cannot still own these connections after an ordinary restart.
 	now := time.Now().UnixMilli()
+	cooldown := time.Hour
+	if len(parallelCooldown) > 0 {
+		cooldown = parallelCooldown[0]
+	}
+	// Crash recovery treats the lost online connections as ending now.
+	if _, err = db.Exec(`UPDATE ip_slowdowns SET expires_at=MAX(expires_at,?) WHERE EXISTS(SELECT 1 FROM connections c JOIN connection_marks m ON m.connection_id=c.id WHERE c.ip=ip_slowdowns.ip AND c.ended_at IS NULL AND m.label='parallel_slow')`, now+cooldown.Milliseconds()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err = db.Exec(`UPDATE connections SET ended_at=?,duration_ms=MAX(0,?-started_at),status='interrupted',reason='process_restart' WHERE ended_at IS NULL`, now, now); err != nil {
 		db.Close()
 		return nil, err
@@ -357,7 +368,10 @@ func (s *Store) Prune(now time.Time, days int) error {
 	if _, err = tx.Exec(`DELETE FROM client_cooldowns WHERE expires_at<=?`, now.UnixMilli()); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`DELETE FROM ip_slowdowns WHERE expires_at<=?`, now.UnixMilli()); err != nil {
+	if _, err = tx.Exec(`DELETE FROM ip_slowdowns WHERE expires_at<=? AND NOT EXISTS(SELECT 1 FROM connections c JOIN connection_marks m ON m.connection_id=c.id WHERE c.ip=ip_slowdowns.ip AND c.ended_at IS NULL AND m.label='parallel_slow')`, now.UnixMilli()); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM ip_probes WHERE (expires_at>0 AND expires_at<=?) OR (expires_at=0 AND updated_at<?)`, now.UnixMilli(), cutoff); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -392,6 +406,12 @@ const connectionColumns = `id,peer,ip,mode,started_at,ended_at,duration_ms,delay
 func scanConnection(row interface{ Scan(...any) error }) (ConnectionRecord, error) {
 	var c ConnectionRecord
 	err := row.Scan(&c.ID, &c.Peer, &c.IP, &c.Mode, &c.StartedAt, &c.EndedAt, &c.DurationMS, &c.DelayedMS, &c.Status, &c.Reason, &c.ClientVersion, &c.Username, &c.BytesSent, &c.BytesReceived, &c.AuthAttempts, &c.ClientMark, &c.MarkExpiresAt)
+	if c.EndedAt == nil {
+		c.DurationMS = time.Now().UnixMilli() - c.StartedAt
+	}
+	if c.DurationMS < 0 {
+		c.DurationMS = 0
+	}
 	return c, err
 }
 func (s *Store) List(ctx context.Context, f RecordFilter) (RecordPage, error) {

@@ -2,7 +2,7 @@
 
 以 Docker 部署的 SSH 诱捕服务，支持真实 SSHv2 握手、延迟拒绝认证，以及可选的慢速横幅模式。
 
-默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
+默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后先进行自适应随机等待，再收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
 
 当前版本：**2.0.3**
 
@@ -73,6 +73,23 @@
 | `WZXJDSSH_RETENTION_DAYS` | `90` | 历史记录保留天数，范围 1–36500 |
 | `WZXJDSSH_DATABASE_MAX_MB` | `0`，不启用 | 数据库主文件、WAL、SHM 合计容量，单位 MiB；`1024` 为 1 GiB |
 | `WZXJDSSH_MAX_AUTH_TRIES` | `0` | 单连接认证次数上限；0 不限次数，范围 0–1000000 |
+| `WZXJDSSH_CONNECTIONS_PER_MINUTE` | `2048` | 每 IP 令牌桶每分钟补充速率及突发容量，0–1000000；0 关闭限制 |
+| `WZXJDSSH_MAX_CLIENTS` | `4096` | 总连接上限，1–2147483647 |
+| `WZXJDSSH_MAX_CLIENTS_PER_IP` | `64` | 每 IP 并发，0–100000；0 关闭限制 |
+| `WZXJDSSH_MAX_PENDING_HANDSHAKES` | `128` | 同时握手上限，1–100000 |
+| `WZXJDSSH_DELAY_MS` | `10000` | 每次主动拖延，1–86400000 毫秒 |
+| `WZXJDSSH_PARALLEL_WINDOW_MS` | `60000` | 同 IP 重叠连接判定窗口，1–3600000 毫秒 |
+| `WZXJDSSH_PARALLEL_CONNECTIONS` | `2` | 触发并发慢速策略的重叠连接数，2–100000 |
+| `WZXJDSSH_PROBE_FAILURE_THRESHOLD` | `3` | 同 IP 连续握手未完成阈值，1–100000 |
+| `WZXJDSSH_PROBE_COOLDOWN_MS` | `900000` | 探针静默冷却，1–86400000 毫秒；期间重连不续期 |
+| `WZXJDSSH_PARALLEL_COOLDOWN_MS` | `3600000` | 最后一条连接断开后闲置冷却，1–604800000 毫秒；重连重新计时 |
+| `WZXJDSSH_HANDSHAKE_TIMEOUT_MS` | `20000` | 握手超时，1–3600000 毫秒 |
+| `WZXJDSSH_IDLE_TIMEOUT_MS` | `120000` | 认证空闲超时，1–86400000 毫秒；主动拖延不计入 |
+| `WZXJDSSH_WRITE_TIMEOUT_MS` | `5000` | 单次完整写入超时，1–60000 毫秒 |
+| `WZXJDSSH_MAX_CONNECTION_TIME_MS` | `0` | 慢速阶段前寿命，0–604800000 毫秒；慢速阶段仍不限时 |
+| `WZXJDSSH_MODE` | `ssh` | ssh / banner |
+| `WZXJDSSH_MAX_LINE_LENGTH` | `32` | banner 模式行长，3–255 字节，含 CRLF |
+| `WZXJDSSH_LOG_LEVEL` | `0` | 0 重要事件，1 连接日志，2 调试 |
 
 例如，发布到宿主机 22，并自定义版本标识：
 
@@ -92,6 +109,14 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 
 标识必须是完整的 `SSH-2.0-...` 字符串，可以带发行版注释；不接受换行、控制字符或非 ASCII 字符。这里只改变版本标识，不改变底层 SSH 实现。
 
+策略参数可直接写在服务 `environment:`，或在 1Panel 编排环境参数区设置，由配套 YAML 传入容器。修改后重建容器，并在管理设置查看实际值。在线连接持续时间由服务器计算，避免浏览器时间偏差。趋势图位于统计卡片下方，主要榜单分两列独立排列，手机单列。
+
+同 IP 并发标记在最后一条连接断开后默认闲置 1 小时冷却，期间重连重新计时；历史连接标签保留。
+
+本次覆盖更新 2.0.3：已有同名镜像时需先拉取新版再重建容器，`pull_policy: missing` 不会自动刷新已有标签。
+
+同一来源 IP 连续 3 次以 `handshake_incomplete` 结束连接，标记为握手探针，冷却 15 分钟。来源端口不影响累计；完成一次真实 SSH 握手会立即清零，其他结束原因也打断连续计数。按结果完成顺序统计。冷却期间不发送 SSH 横幅或任何 SSH 响应，读取并丢弃数据，到期关闭静默连接；期间重连不延长冷却，重启保留原到期时间。静默连接仍受容量和速率限制，容量不足时关闭新 TCP 连接，不挤掉旧慢速连接。规则仅适用于 SSH 诱捕入口。
+
 ## 默认配置
 
 镜像配置路径为 `/etc/wzxjdssh/config`，模板见 [configs/wzxjdssh.conf](configs/wzxjdssh.conf)。时间单位均为毫秒。
@@ -106,10 +131,13 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 | `MaxLineLength` | 32 | 仅用于 banner 模式，范围 3–255，包含 CRLF |
 | `MaxClients` | 4096 | 总接入上限，范围 1–2147483647；实际容量受系统资源限制 |
 | `MaxClientsPerIP` | 64 | 每 IP 并发上限；0 关闭此限制 |
-| `ConnectionsPerMinute` | 120 | 每 IP 令牌桶补充速率及突发容量；0 关闭 |
+| `ConnectionsPerMinute` | 2048 | 每 IP 令牌桶补充速率及突发容量；0 关闭 |
 | `MaxPendingHandshakes` | 128 | 同时进行的 SSH 握手上限 |
 | `MaxAuthTries` | 0 | 单连接认证失败次数上限；0 不限次数 |
-| `ParallelWindow` | 60000 | 同 IP 短时并发判定及新连接慢速保留窗口，毫秒 |
+| `ParallelCooldown` | 3600000 | 同 IP 并发标记在最后连接断开后闲置冷却，重连重新计时 |
+| `ProbeFailureThreshold` | 3 | 同 IP 连续 handshake_incomplete 触发探针标记的次数 |
+| `ProbeCooldown` | 900000 | 探针静默冷却，毫秒；重连不延长 |
+| `ParallelWindow` | 60000 | 同 IP 首次并发判定窗口，毫秒；闲置冷却单独设置 |
 | `ParallelConnections` | 2 | 窗口内重叠连接达到此数量后，对该 IP 全部连接使用慢速策略 |
 | `HandshakeTimeout` | 20000 | 版本交换和密钥交换超时 |
 | `IdleTimeout` | 120000 | 认证阶段客户端空闲超时；服务端主动等待不计入 |
@@ -119,7 +147,7 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 | `ServerVersion` | SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4 | 配置文件中的默认 SSH 标识 |
 | `LogLevel` | 0 | 0 重要事件，1 连接与认证事件，2 调试 |
 
-配置接受空格、Tab 和 `#` 注释。未知键、重复键、非法数值和打不开的显式配置文件均报错。命令行选项覆盖相应配置；`-v` 开启连接日志，`-vv` 开启调试日志。
+配置接受空格、Tab 和 `#` 注释。未知键、重复键、非法数值和打不开的显式配置文件均报错。非空策略环境变量覆盖配置文件，未设置或空值沿用文件；配套编排会展开为表中默认值。命令行选项覆盖相应配置与环境变量；`-v` 开启连接日志，`-vv` 开启调试日志。
 
 **标识优先级：**非空 `WZXJDSSH_SERVER_VERSION` 环境变量覆盖配置文件中的 `ServerVersion`。配套编排始终传入该值，留空时展开为 Debian 默认值。若通过挂载配置文件定制了 `ServerVersion`，应将编排参数也设置为同样的值，或移除服务 `environment` 中的这个变量。
 
@@ -151,3 +179,15 @@ Web 管理会话默认闲置 1 小时自动退出，可在“管理设置”修�
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。第三方依赖遵循各自许可证，见 [第三方许可声明](THIRD-PARTY-NOTICES.txt)。
+
+冷却重连的认证等待默认从 10 秒开始，按来源 IP 和完整客户端 SSH 标识在内存中学习：等待期间提前退出，后续基准减少 1 秒；收到认证后的请求或通道时，增加 1 秒，每连接只调整一次。基准范围为 3–15 秒，每次等待叠加约 ±10% 随机扰动，最终实际等待仍限制在 3–15 秒。并发慢速策略优先，服务停止和容量回收不会作为失败样本。学习结果不写入 SQLite，随该标签冷却到期废弃，容器重启后从初始值重新学习；标签本身仍沿用已有持久化机制。
+
+| 参数 | 默认值 | 作用 |
+| --- | --- | --- |
+| `WZXJDSSH_COOLDOWN_AUTH_DELAY_MS` | `10000` | 冷却重连认证初始等待，需在最小值和最大值之间 |
+| `WZXJDSSH_COOLDOWN_AUTH_DELAY_MIN_MS` | `3000` | 实际等待下限，不得小于 3000 毫秒 |
+| `WZXJDSSH_COOLDOWN_AUTH_DELAY_MAX_MS` | `15000` | 实际等待上限，不超过 60000 毫秒 |
+| `WZXJDSSH_COOLDOWN_AUTH_DELAY_STEP_MS` | `1000` | 每次学习调整量，1–60000 毫秒 |
+| `WZXJDSSH_COOLDOWN_AUTH_JITTER_PERCENT` | `10` | 随机扰动比例，0–50；最终仍钳在上下限 |
+
+观测页全部榜单纳入两列独立排布，按卡片实际高度将后续榜单放到较短列，不再等待另一列结束；卡片间距统一 12 像素，手机单列。

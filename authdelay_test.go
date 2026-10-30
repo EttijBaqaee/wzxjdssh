@@ -162,8 +162,8 @@ func TestAuthDelayJitterAlwaysWithinBounds(t *testing.T) {
 
 func TestAdaptiveAuthenticationLearnsPeerOutcome(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.CooldownAuthDelay = 4 * time.Second
-	cfg.CooldownAuthMax = 5 * time.Second
+	cfg.CooldownAuthDelay = 10 * time.Second
+	cfg.CooldownAuthMax = 15 * time.Second
 	store := testStore(t)
 	version := "SSH-2.0-adaptive-outcome"
 	key := authDelayKey{"127.0.0.1", version}
@@ -238,6 +238,39 @@ func TestAdaptiveAuthenticationLearnsPeerOutcome(t *testing.T) {
 	eventually(t, func() bool { return s.stats.active.Load() == 0 })
 	if got := s.authDelays.base(key, until, time.Now(), cfg); got != 4*time.Second {
 		t.Fatal("successful client later departure reduced delay", got)
+	}
+}
+
+func TestInterruptedCooldownResamplesShortBudgetAndKeepsExpiry(t *testing.T) {
+	cfg := DefaultConfig()
+	now := time.Now()
+	until := now.Add(time.Hour).UnixMilli()
+	key := authDelayKey{"2001:db8::7", "SSH-2.0-Go"}
+	var l authDelayLearning
+	if got := l.base(key, until, now, cfg); got != 10*time.Second {
+		t.Fatal(got)
+	}
+	l.observeInterrupted(key, until, now, 3800*time.Millisecond, cfg)
+	if got := l.base(key, until, now, cfg); got != 3*time.Second {
+		t.Fatal("short-budget returning client still requires many visits", got)
+	}
+	for i := 0; i < 100; i++ {
+		wait, err := jitterAuthDelay(l.base(key, until, now, cfg), cfg)
+		if err != nil || wait < 3*time.Second || wait > 3300*time.Millisecond {
+			t.Fatal(wait, err)
+		}
+	}
+	l.observe(key, until, now, true, cfg)
+	l.observeInterrupted(key, until, now, 20*time.Second, cfg)
+	if got := l.base(key, until, now, cfg); got != 3*time.Second {
+		t.Fatal("interruption increased delay", got)
+	}
+	later := now.Add(time.Hour)
+	newUntil := later.Add(time.Hour).UnixMilli()
+	l.base(key, newUntil, later, cfg)
+	l.observeInterrupted(key, until, later, 3500*time.Millisecond, cfg)
+	if got := l.base(key, newUntil, later, cfg); got != 10*time.Second {
+		t.Fatal("expired connection changed a new cooldown", got)
 	}
 }
 

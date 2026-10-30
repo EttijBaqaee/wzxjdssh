@@ -101,6 +101,29 @@ func (l *authDelayLearning) observe(key authDelayKey, until int64, now time.Time
 	l.entries[key] = entry
 }
 
+// A sparse returning client cannot afford many one-second learning steps.
+// Use the interrupted authentication wait as a fresh upper bound, also after
+// process-local learning was reset. Never increase the wait from this sample.
+func (l *authDelayLearning) observeInterrupted(key authDelayKey, until int64, now time.Time, elapsed time.Duration, cfg Config) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, ok := l.entries[key]
+	if !ok || entry.until != until {
+		return
+	}
+	if until <= now.UnixMilli() {
+		delete(l.entries, key)
+		return
+	}
+	value := entry.base - cfg.CooldownAuthStep
+	if elapsed > 0 && elapsed-cfg.CooldownAuthStep < value {
+		value = elapsed - cfg.CooldownAuthStep
+	}
+	entry.base = clampAuthDelay(value, cfg)
+	entry.seeded = true
+	l.entries[key] = entry
+}
+
 func jitterAuthDelay(base time.Duration, cfg Config) (time.Duration, error) {
 	base = clampAuthDelay(base, cfg)
 	spread := base * time.Duration(cfg.CooldownAuthJitter) / 100
@@ -115,6 +138,10 @@ func (c *clientConn) learnAuthDelay(caught bool) {
 		return
 	}
 	if !c.authLearned.CompareAndSwap(false, true) {
+		return
+	}
+	if !caught && c.peerDuringDelay.Load() {
+		c.server.authDelays.observeInterrupted(authDelayKey{c.ip, c.clientVersion}, c.markedUntil, time.Now(), time.Duration(c.interruptedAuthWait.Load()), *c.server.cfg.Load())
 		return
 	}
 	c.server.authDelays.observe(authDelayKey{c.ip, c.clientVersion}, c.markedUntil, time.Now(), caught, *c.server.cfg.Load())

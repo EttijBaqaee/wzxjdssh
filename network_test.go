@@ -84,27 +84,29 @@ func TestSimulatedNetworkRefusesForwardingAndSubsystems(t *testing.T) {
 	}
 }
 
-func TestSimulatedNetworkIgnoresAuthIdleButHonorsLifetime(t *testing.T) {
+func TestSimulatedNetworkIgnoresAuthIdleAndLegacyLifetime(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Delay = 40 * time.Millisecond
 	cfg.IdleTimeout = 100 * time.Millisecond
-	cfg.MaxConnectionTime = 700 * time.Millisecond
+	cfg.MaxConnectionTime = 100 * time.Millisecond
 	s, store, c := simulatedTestServer(t, cfg)
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(350 * time.Millisecond)
 	if _, _, err := c.SendRequest("keepalive@openssh.com", true, nil); err != nil {
 		t.Fatal("auth idle timeout closed simulated link", err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- c.Wait() }()
 	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("maximum lifetime did not release simulated connection")
+	case err := <-done:
+		t.Fatal("legacy lifetime released simulated connection", err)
+	case <-time.After(100 * time.Millisecond):
 	}
+	c.Close()
+	<-done
 	eventually(t, func() bool { return s.stats.active.Load() == 0 })
-	page, err := store.List(context.Background(), RecordFilter{Status: "timeout"})
-	if err != nil || page.Total != 1 || page.Items[0].Reason != "max_connection_time" {
-		t.Fatal("lifetime reason not retained", page, err)
+	page, err := store.List(context.Background(), RecordFilter{Status: "simulated_closed"})
+	if err != nil || page.Total != 1 || page.Items[0].Reason == "max_connection_time" {
+		t.Fatal("simulated peer close not retained", page, err)
 	}
 }
 

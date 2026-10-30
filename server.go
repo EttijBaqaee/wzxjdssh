@@ -22,6 +22,7 @@ type counters struct {
 	rejected     atomic.Uint64
 	acceptErrors atomic.Uint64
 	closed       atomic.Uint64
+	evicted      atomic.Uint64
 	bytesSent    atomic.Uint64
 	authAttempts atomic.Uint64
 	active       atomic.Int64
@@ -198,14 +199,11 @@ func (s *Server) admit(ip string, c Config) string {
 	if s.stopping {
 		return "shutdown"
 	}
-	if len(s.clients) >= c.MaxClients {
-		return "max_clients"
-	}
-	if c.MaxClientsPerIP > 0 && s.ipCount[ip] >= c.MaxClientsPerIP {
-		return "per_ip_limit"
-	}
 	if c.Mode == "ssh" && s.stats.pending.Load() >= int64(c.MaxPendingHandshakes) {
 		return "handshake_limit"
+	}
+	if _, reason := s.capacityVictimsLocked(ip, c); reason != "" {
+		return reason
 	}
 	if c.ConnectionsPerMinute > 0 {
 		now := time.Now()
@@ -272,6 +270,10 @@ func (s *Server) acceptLoop(l net.Listener) {
 		s.mu.Lock()
 		cfg := *s.cfg.Load()
 		reason := s.admit(ip, cfg)
+		var victims []*clientConn
+		if reason == "" {
+			victims, reason = s.capacityVictimsLocked(ip, cfg)
+		}
 		if reason != "" {
 			s.stats.rejected.Add(1)
 			s.mu.Unlock()
@@ -282,8 +284,29 @@ func (s *Server) acceptLoop(l net.Listener) {
 			}
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.MaxConnectionTime)
-		c := &clientConn{Conn: raw, server: s, cfg: cfg, ip: ip, started: time.Now(), ctx: ctx, cancel: cancel}
+		for _, victim := range victims {
+			victim.capacityEvicted.Store(true)
+			s.stats.evicted.Add(1)
+			victim.cancel()
+			victim.Conn.Close()
+		}
+		if len(victims) > 0 {
+			// Wait for actual resource release without holding the server lock.
+			// This accept loop is the sole admission writer, so no slot is stolen.
+			s.mu.Unlock()
+			for _, victim := range victims {
+				<-victim.done
+			}
+			s.mu.Lock()
+			if s.stopping {
+				s.mu.Unlock()
+				raw.Close()
+				return
+			}
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		c := &clientConn{Conn: raw, server: s, cfg: cfg, ip: ip, started: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{})}
+		c.startLifetime()
 		if cfg.Mode == "ssh" {
 			c.pending.Store(true)
 			s.stats.pending.Add(1)
@@ -330,6 +353,12 @@ type clientConn struct {
 	clientVersion   string
 	markedUntil     int64
 	forceSlow       atomic.Bool
+	longLived       atomic.Bool
+	capacityEvicted atomic.Bool
+	lifetimeExpired atomic.Bool
+	lifetimeMu      sync.Mutex
+	lifetimeTimer   *time.Timer
+	done            chan struct{}
 }
 
 func (c *clientConn) releasePending() {
@@ -405,8 +434,10 @@ func (c *clientConn) Write(p []byte) (int, error) {
 }
 
 func (s *Server) handle(c *clientConn) {
+	defer close(c.done)
 	defer s.wg.Done()
 	defer func() {
+		c.stopLifetime()
 		status, reason := "closed", "peer_closed"
 		if c.readTimedOut.Load() {
 			status = "timeout"
@@ -415,7 +446,7 @@ func (s *Server) handle(c *clientConn) {
 				reason = "idle_timeout"
 			}
 		}
-		if errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
+		if c.lifetimeExpired.Load() {
 			status = "timeout"
 			reason = "max_connection_time"
 		}
@@ -444,7 +475,7 @@ func (s *Server) handle(c *clientConn) {
 			if status == "closed" {
 				status = "simulated_closed"
 			}
-		} else if !stopping && c.peerDuringDelay.Load() && c.markedUntil == 0 && !c.forceSlow.Load() {
+		} else if !stopping && !c.capacityEvicted.Load() && c.peerDuringDelay.Load() && c.markedUntil == 0 && !c.forceSlow.Load() {
 			s.policyMu.Lock()
 			if !c.forceSlow.Load() {
 				status = "auth_interrupted"
@@ -455,6 +486,9 @@ func (s *Server) handle(c *clientConn) {
 				}
 			}
 			s.policyMu.Unlock()
+		}
+		if !stopping && c.capacityEvicted.Load() {
+			status, reason = "capacity_evicted", "connection_capacity"
 		}
 		c.cancel()
 		c.Conn.Close()
@@ -511,6 +545,7 @@ func (s *Server) handle(c *clientConn) {
 	}
 	// Callback runs only after SSH transport and key exchange are ready.
 	cfg.PreAuthConnCallback = func(meta ssh.ServerPreAuthConn) {
+		c.retainSlowConnection()
 		c.clientVersion = string(meta.ClientVersion())
 		c.authStage.Store(true)
 		c.releasePending()
@@ -708,11 +743,15 @@ func (s *Server) Snapshot() map[string]any {
 	live := s.liveSnapshotLocked(time.Now())
 	strategy := map[string]any{"mode": cfg.Mode, "delay_ms": cfg.Delay.Milliseconds(), "client_cooldown_ms": clientCooldown.Milliseconds(), "max_line_length": cfg.MaxLineLength, "max_auth_tries": cfg.MaxAuthTries, "handshake_timeout_ms": cfg.HandshakeTimeout.Milliseconds(), "idle_timeout_ms": cfg.IdleTimeout.Milliseconds(), "max_connection_time_ms": cfg.MaxConnectionTime.Milliseconds(), "max_clients": cfg.MaxClients, "max_clients_per_ip": cfg.MaxClientsPerIP, "connections_per_minute": cfg.ConnectionsPerMinute, "max_pending_handshakes": cfg.MaxPendingHandshakes}
 	strategy["cooldown_return_mode"] = "network_jitter"
+	strategy["slow_connection_lifetime"] = "unlimited"
+	strategy["max_connection_time_ms"] = int64(0)
+	strategy["pre_transport_max_time_ms"] = cfg.MaxConnectionTime.Milliseconds()
+	strategy["capacity_policy"] = "oldest_slow_on_demand"
 	strategy["parallel_window_ms"] = cfg.ParallelWindow.Milliseconds()
 	strategy["parallel_connections"] = cfg.ParallelConnections
 	strategy["parallel_mode"] = "delayed_rejection"
 	strategy["network_jitter"] = networkDelayPolicy(cfg.Delay)
-	return map[string]any{"accepted": s.stats.accepted.Load(), "rejected": s.stats.rejected.Load(), "accept_errors": s.stats.acceptErrors.Load(), "closed": s.stats.closed.Load(), "active": s.stats.active.Load(), "pending_handshakes": s.stats.pending.Load(), "bytes_sent": s.stats.bytesSent.Load(), "auth_attempts": s.stats.authAttempts.Load(), "connection_seconds": float64(nanos) / float64(time.Second), "storage_errors": s.storageErrors.Load(), "strategy": strategy, "live": live}
+	return map[string]any{"accepted": s.stats.accepted.Load(), "rejected": s.stats.rejected.Load(), "capacity_evicted": s.stats.evicted.Load(), "accept_errors": s.stats.acceptErrors.Load(), "closed": s.stats.closed.Load(), "active": s.stats.active.Load(), "pending_handshakes": s.stats.pending.Load(), "bytes_sent": s.stats.bytesSent.Load(), "auth_attempts": s.stats.authAttempts.Load(), "connection_seconds": float64(nanos) / float64(time.Second), "storage_errors": s.storageErrors.Load(), "strategy": strategy, "live": live}
 }
 
 func (s *Server) storageError(err error) {

@@ -4,9 +4,9 @@
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
 
-当前版本：**2.0.2**
+当前版本：**2.0.3**
 
-镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.0.2`（Linux amd64），同时提供 `latest` 标签。
+镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.0.3`（Linux amd64），同时提供 `latest` 标签。
 
 ## 工作原理
 
@@ -15,13 +15,17 @@
 1. 接收 TCP 连接并发送 SSH 服务端版本标识。
 2. 使用持久化主机密钥完成真实 SSHv2 密钥交换和加密传输。
 3. 接受密码、公钥探测或 keyboard-interactive 认证流程，按 `Delay` 等待后拒绝认证。
-4. 达到认证次数、超时或资源上限时关闭连接。
+4. 慢速阶段不限总持续时间；新连接到达且容量已满时，按需回收保持最久的慢速连接。
 
-默认每次认证延迟 **10 秒**，单连接**不限制认证次数**，仍受最长连接时间约束。客户端自己的超时或主动断开也会结束连接。
+默认每次认证延迟 **10 秒**，单连接**不限制认证次数**，慢速阶段不限总持续时间。客户端自己的超时或主动断开也会结束连接。
 
 同一 IP 在 60 秒内出现至少两条重叠连接时，所有在线连接优先使用慢速策略，后续认证继续延迟拒绝。该 IP 的旧冷却标记会被清除，这组连接断开时不会再写入认证超时标记。并发策略优先于单客户端冷却；已经进入仿真会话的连接改为固定间隔响应，仍不执行任何命令。
 
 可选 `Mode banner` 在版本交换前持续、缓慢地发送随机可打印字符和 CRLF；首行同样等待 `Delay`。这种模式不完成真实 SSH 握手。
+
+慢速横幅、SSH 延迟认证和仿真网络会话均不限总持续时间，不再因为连接超过 1 小时而退出。即使旧配置中仍有 `MaxConnectionTime 3600000`，慢速阶段也会取消该计时器。只有新的合格连接到达，且总连接数或该 IP 的并发数已满时，才按需回收保持最久的慢速连接；单 IP 满载只回收同 IP 的连接，回收后才接纳新连接。没有新连接时，达到上限本身不会清退。容量回收记录为“容量回收”，不会产生认证超时冷却标记。
+
+客户端主动退出、网络错误、服务停止、未完成握手的超时，以及认证阶段客户端真正空闲，仍可能结束连接；服务端主动拖延不计入客户端空闲时间。自定义的非零认证次数限制也会继续生效，默认不限制次数。
 
 ## 功能
 
@@ -47,12 +51,12 @@
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.2`，无需自行构建。
+1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.3`，无需自行构建。
 2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`；缺少镜像时会自动拉取。
 3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
-编排使用 `pull_policy: missing`，固定到 `2.0.2` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.0.2`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像，测试工具不会进入最终镜像。
+编排使用 `pull_policy: missing`，固定到 `2.0.3` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.0.3`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像，测试工具不会进入最终镜像。
 
 ### 常用编排参数
 
@@ -110,7 +114,7 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 | `HandshakeTimeout` | 20000 | 版本交换和密钥交换超时 |
 | `IdleTimeout` | 120000 | 认证阶段客户端空闲超时；服务端主动等待不计入 |
 | `WriteTimeout` | 5000 | 一次完整写入的超时 |
-| `MaxConnectionTime` | 3600000 | 单连接总寿命上限 |
+| `MaxConnectionTime` | 0 | 0 不限时；非零值只约束慢速阶段前的连接，不限制慢速横幅、延迟认证或仿真会话 |
 | `HostKeyDirectory` | /data | 主机密钥目录，启动后不能热改 |
 | `ServerVersion` | SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4 | 配置文件中的默认 SSH 标识 |
 | `LogLevel` | 0 | 0 重要事件，1 连接与认证事件，2 调试 |

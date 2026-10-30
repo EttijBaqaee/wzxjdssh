@@ -24,6 +24,8 @@ type LiveIP struct {
 
 type LiveStats struct {
 	ActiveIPs           int              `json:"active_ips"`
+	HeldIPs             int              `json:"held_ips"`
+	HeldConnections     int              `json:"held_connections"`
 	DelayingIPs         int              `json:"delaying_ips"`
 	DelayingConnections int              `json:"delaying_connections"`
 	LongestConnections  []LiveConnection `json:"longest_connections"`
@@ -53,12 +55,17 @@ func (c *clientConn) trackPause(wait func() error) error {
 func (s *Server) liveSnapshotLocked(now time.Time) LiveStats {
 	live := LiveStats{LongestConnections: []LiveConnection{}, IPConcurrency: []LiveIP{}}
 	ips := make(map[string]LiveIP)
+	heldIPs := make(map[string]bool)
 	for c := range s.clients {
 		elapsed := c.delayed
 		delaying := !c.delayStarted.IsZero()
 		if delaying {
 			elapsed += now.Sub(c.delayStarted)
 			live.DelayingConnections++
+		}
+		if c.probeUntil == 0 && (elapsed > 0 || c.simulated.Load()) {
+			live.HeldConnections++
+			heldIPs[c.ip] = true
 		}
 		ip := ips[c.ip]
 		ip.IP = c.ip
@@ -73,6 +80,7 @@ func (s *Server) liveSnapshotLocked(now time.Time) LiveStats {
 		live.LongestConnections = append(live.LongestConnections, LiveConnection{ConnectionID: c.recordID, IP: c.ip, Peer: c.RemoteAddr().String(), Mode: c.cfg.Mode, StartedAt: c.started.UnixMilli(), DurationMS: now.Sub(c.started).Milliseconds(), DelayedMS: elapsed.Milliseconds(), Delaying: delaying})
 	}
 	live.ActiveIPs = len(ips)
+	live.HeldIPs = len(heldIPs)
 	for _, ip := range ips {
 		if ip.DelayingConnections > 0 {
 			live.DelayingIPs++

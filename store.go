@@ -77,17 +77,19 @@ type DailyPoint struct {
 	Attempts    int64  `json:"attempts"`
 }
 type StoredStats struct {
-	Connections int64        `json:"connections"`
-	Active      int64        `json:"active"`
-	Attempts    int64        `json:"attempts"`
-	UniqueIPs   int64        `json:"unique_ips"`
-	Rejected    int64        `json:"rejected"`
-	Today       int64        `json:"today"`
-	Sources     []Ranking    `json:"sources"`
-	Usernames   []Ranking    `json:"usernames"`
-	Passwords   []Ranking    `json:"passwords"`
-	Methods     []Ranking    `json:"methods"`
-	Daily       []DailyPoint `json:"daily"`
+	Connections  int64        `json:"connections"`
+	Active       int64        `json:"active"`
+	Attempts     int64        `json:"attempts"`
+	UniqueIPs    int64        `json:"unique_ips"`
+	Rejected     int64        `json:"rejected"`
+	AuthRejected int64        `json:"auth_rejected"`
+	ProbeBlocked int64        `json:"probe_blocked"`
+	Today        int64        `json:"today"`
+	Sources      []Ranking    `json:"sources"`
+	Usernames    []Ranking    `json:"usernames"`
+	Passwords    []Ranking    `json:"passwords"`
+	Methods      []Ranking    `json:"methods"`
+	Daily        []DailyPoint `json:"daily"`
 }
 
 func OpenStore(path string, parallelCooldown ...time.Duration) (*Store, error) {
@@ -476,6 +478,12 @@ func (s *Store) Stats(ctx context.Context) (StoredStats, error) {
 		return out, err
 	}
 	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM auth_attempts`).Scan(&out.Attempts); err != nil {
+		return out, err
+	}
+	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM auth_attempts WHERE result='rejected'`).Scan(&out.AuthRejected); err != nil {
+		return out, err
+	}
+	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM connections WHERE status='probe_blocked'`).Scan(&out.ProbeBlocked); err != nil {
 		return out, err
 	}
 	for _, item := range []struct {

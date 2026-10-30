@@ -556,16 +556,8 @@ func (s *Server) handle(c *clientConn) {
 		if !c.delayStarted.IsZero() {
 			delayed += time.Since(c.delayStarted)
 		}
-		delete(s.clients, c)
-		s.ipCount[c.ip]--
-		if s.ipCount[c.ip] == 0 {
-			delete(s.ipCount, c.ip)
-		}
-		s.stats.active.Add(-1)
 		s.mu.Unlock()
 		duration := time.Since(c.started)
-		s.stats.closedNanos.Add(int64(duration))
-		s.stats.closed.Add(1)
 		if s.store != nil && c.recordID != 0 {
 			s.policyMu.Lock()
 			if c.forceSlow.Load() {
@@ -584,6 +576,17 @@ func (s *Server) handle(c *clientConn) {
 			}
 			s.policyMu.Unlock()
 		}
+		// Keep the live sample available until its final delay is persisted.
+		s.mu.Lock()
+		delete(s.clients, c)
+		s.ipCount[c.ip]--
+		if s.ipCount[c.ip] == 0 {
+			delete(s.ipCount, c.ip)
+		}
+		s.stats.active.Add(-1)
+		s.mu.Unlock()
+		s.stats.closedNanos.Add(int64(duration))
+		s.stats.closed.Add(1)
 		s.log(1, "closed", map[string]any{"peer": c.RemoteAddr().String(), "duration_ms": duration.Milliseconds(), "bytes_sent": c.bytesSent.Load()})
 	}()
 	go func() { <-c.ctx.Done(); c.Conn.Close() }()

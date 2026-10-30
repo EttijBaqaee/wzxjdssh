@@ -354,12 +354,17 @@ func (w *Web) stats(rw http.ResponseWriter, r *http.Request) {
 		sendJSON(rw, 500, map[string]string{"error": "无法读取拖延排行"})
 		return
 	}
+	totalDelay, err := w.store.TotalDelay(r.Context(), measured)
+	if err != nil {
+		sendJSON(rw, 500, map[string]string{"error": "无法读取累计拖延时间"})
+		return
+	}
 	size, err := w.store.DatabaseBytes()
 	if err != nil {
 		sendJSON(rw, 500, map[string]string{"error": "无法读取数据库容量"})
 		return
 	}
-	sendJSON(rw, 200, map[string]any{"stored": stats, "runtime": live, "ip_delays": delays, "database": map[string]any{"bytes": size, "max_bytes": w.store.maxBytes.Load(), "capacity_deleted": w.store.capacityDeleted.Load()}, "retention_days": w.cfg.RetentionDays, "timezone": "UTC"})
+	sendJSON(rw, 200, map[string]any{"stored": stats, "runtime": live, "ip_delays": delays, "total_delayed_ms": totalDelay, "database": map[string]any{"bytes": size, "max_bytes": w.store.maxBytes.Load(), "capacity_deleted": w.store.capacityDeleted.Load()}, "retention_days": w.cfg.RetentionDays, "timezone": "UTC"})
 }
 
 func (w *Web) settings(rw http.ResponseWriter, r *http.Request) {

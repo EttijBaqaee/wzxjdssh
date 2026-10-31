@@ -62,28 +62,12 @@ func TestProbeSilentlyDiscardsAcrossSourcePorts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Stop()
-	ports := map[string]bool{}
+	// Seed the legacy IP detector explicitly. Uncredentialed connections now
+	// have a separate, per-connection classification and never feed it.
 	for i := 0; i < 3; i++ {
-		conn := connect(t, cfg)
-		ports[conn.LocalAddr().String()] = true
-		bannerLine(t, conn)
-		conn.Close()
-		eventually(t, func() bool {
-			page, err := store.List(context.Background(), RecordFilter{})
-			if err != nil {
-				return false
-			}
-			n := 0
-			for _, r := range page.Items {
-				if r.Reason == "handshake_incomplete" {
-					n++
-				}
-			}
-			return n == i+1
-		})
-	}
-	if len(ports) != 3 {
-		t.Fatal("test did not use different source ports")
+		if _, err := store.ProbeResult(0, "127.0.0.1", true, time.Now(), cfg); err != nil {
+			t.Fatal(err)
+		}
 	}
 	eventually(t, func() bool { until, _ := store.ProbeCooldown("127.0.0.1", time.Now()); return until > 0 })
 	conn := connect(t, cfg)

@@ -68,12 +68,12 @@ func TestPasswordRankingAndPersistentIPDelay(t *testing.T) {
 	if err = s.finish(b, time.Second, "closed", "", 0, 0, 300*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	rank, err := s.DelayRanking(ctx, []liveDelay{{ID: a, DelayedMS: 400}, {ID: c, DelayedMS: 600}})
-	if err != nil || len(rank) != 2 || rank[0].IP != "2001:db8::1" || rank[0].LongestMS != 600 || rank[1].DelayedMS != 700 {
+	rank, err := s.DelayRanking(ctx, []liveDelay{{ID: a, DelayedMS: 400, DurationMS: 2000}, {ID: c, DelayedMS: 600, DurationMS: 2000}, {ID: c, DelayedMS: 500, DurationMS: 1500}})
+	if err != nil || len(rank) != 2 || rank[0].IP != "2001:db8::1" || rank[0].LongestMS != 2000 || rank[0].LongestConnectionID != c || rank[0].DelayedMS != 600 || rank[1].DelayedMS != 700 {
 		t.Fatal(rank, err)
 	}
 	// An overlay must not double-count a connection that finished during stats.
-	if rank[1].LongestMS != 400 {
+	if rank[1].LongestMS != 1000 || rank[1].MaxDelayedMS != 400 {
 		t.Fatal(rank)
 	}
 }
@@ -96,6 +96,12 @@ func TestWriteBrowserIPFixture(t *testing.T) {
 		return
 	}
 	now := time.Now().Add(-time.Hour)
+	for _, ip := range []string{"8.8.8.8", "223.5.5.5", "2606:4700:4700::1111"} {
+		id := mustStart(t, s, ip, now)
+		if err = s.finish(id, 43*time.Minute+54*time.Second, "closed", "peer_closed", 10, 20, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for i := 0; i < 32; i++ {
 		id := mustStart(t, s, fmt.Sprintf("192.0.2.%d", i+1), now.Add(time.Duration(i)*time.Second))
 		if err = s.finish(id, time.Minute, "auth_rejected", "authentication_failed", 10, 20, time.Duration(i+1)*time.Second); err != nil {
@@ -117,5 +123,28 @@ func TestWriteBrowserIPFixture(t *testing.T) {
 		if err = s.finish(id, time.Minute, "auth_rejected", "authentication_failed", 10, 20, time.Duration(i+10)*time.Second); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestIPLongestLifetimeMatchesDetailNotImposedDelay(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	ip := "77.239.124.161"
+	short := mustStart(t, s, ip, now.Add(-10*time.Minute))
+	longest := mustStart(t, s, ip, now.Add(-time.Hour))
+	if err := s.finish(short, 8*time.Minute, "closed", "peer_closed", 0, 0, 7*time.Minute+8*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.finish(longest, 43*time.Minute+54*time.Second, "simulated_closed", "peer_closed", 0, 0, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	rank, err := s.DelayRanking(ctx, nil)
+	if err != nil || len(rank) != 1 || rank[0].LongestConnectionID != longest || rank[0].LongestMS != (43*time.Minute+54*time.Second).Milliseconds() || rank[0].DelayedMS != (8*time.Minute+8*time.Second).Milliseconds() {
+		t.Fatal(rank, err)
+	}
+	page, err := s.ListIPs(ctx, RecordFilter{IP: ip})
+	if err != nil || page.Items[0].LongestMS != rank[0].LongestMS {
+		t.Fatal(page, err)
 	}
 }

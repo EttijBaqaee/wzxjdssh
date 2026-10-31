@@ -9,16 +9,17 @@ import (
 )
 
 type IPRecord struct {
-	IP           string `json:"ip"`
-	Connections  int64  `json:"connections"`
-	Active       int64  `json:"active"`
-	AuthAttempts int64  `json:"auth_attempts"`
-	FirstSeen    int64  `json:"first_seen"`
-	LastSeen     int64  `json:"last_seen"`
-	LongestMS    int64  `json:"longest_ms"`
-	LatestID     int64  `json:"latest_id"`
-	LatestStatus string `json:"latest_status"`
-	ClientMark   string `json:"client_mark"`
+	Geo          IPAttribution `json:"geo"`
+	IP           string        `json:"ip"`
+	Connections  int64         `json:"connections"`
+	Active       int64         `json:"active"`
+	AuthAttempts int64         `json:"auth_attempts"`
+	FirstSeen    int64         `json:"first_seen"`
+	LastSeen     int64         `json:"last_seen"`
+	LongestMS    int64         `json:"longest_ms"`
+	LatestID     int64         `json:"latest_id"`
+	LatestStatus string        `json:"latest_status"`
+	ClientMark   string        `json:"client_mark"`
 }
 
 type IPRecordPage struct {
@@ -29,14 +30,17 @@ type IPRecordPage struct {
 }
 
 type IPDelay struct {
-	IP        string `json:"ip"`
-	DelayedMS int64  `json:"delayed_ms"`
-	LongestMS int64  `json:"longest_ms"`
+	IP                  string `json:"ip"`
+	DelayedMS           int64  `json:"delayed_ms"`
+	LongestMS           int64  `json:"longest_ms"`
+	LongestConnectionID int64  `json:"longest_connection_id"`
+	MaxDelayedMS        int64  `json:"max_delayed_ms"`
 }
 
 type liveDelay struct {
-	ID        int64 `json:"id"`
-	DelayedMS int64 `json:"delayed_ms"`
+	ID         int64 `json:"id"`
+	DelayedMS  int64 `json:"delayed_ms"`
+	DurationMS int64 `json:"duration_ms"`
 }
 
 func recordWhere(f RecordFilter) (string, []any) {
@@ -122,11 +126,16 @@ func (s *Store) DelayRanking(ctx context.Context, active []liveDelay) ([]IPDelay
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `WITH live AS (
-	 SELECT json_extract(value,'$.id') AS id,json_extract(value,'$.delayed_ms') AS delayed FROM json_each(?)
-	), measured AS (
-	 SELECT c.ip,MAX(c.delayed_ms,COALESCE(l.delayed,0)) AS delayed FROM connections c LEFT JOIN live l ON l.id=c.id
-	) SELECT ip,SUM(delayed) AS total,MAX(delayed) AS longest FROM measured GROUP BY ip HAVING total>0 ORDER BY longest DESC,total DESC,ip LIMIT 10`, string(payload))
+	rows, err := s.db.QueryContext(ctx, `WITH samples AS (
+	 SELECT json_extract(value,'$.id') AS id,json_extract(value,'$.delayed_ms') AS delayed,json_extract(value,'$.duration_ms') AS duration FROM json_each(?)
+	), live AS (SELECT id,MAX(delayed) AS delayed,MAX(duration) AS duration FROM samples GROUP BY id), measured AS (
+	 SELECT c.id,c.ip,MAX(c.delayed_ms,COALESCE(l.delayed,0)) AS delayed,
+	 CASE WHEN c.ended_at IS NULL THEN COALESCE(NULLIF(l.duration,0),MAX(0,?-c.started_at)) ELSE c.duration_ms END AS duration
+	 FROM connections c LEFT JOIN live l ON l.id=c.id
+	), ranked AS (
+	 SELECT *,SUM(delayed) OVER(PARTITION BY ip) AS total,MAX(delayed) OVER(PARTITION BY ip) AS max_delay,
+	 ROW_NUMBER() OVER(PARTITION BY ip ORDER BY duration DESC,id DESC) AS position FROM measured
+	) SELECT ip,total,duration,id,max_delay FROM ranked WHERE position=1 AND total>0 ORDER BY duration DESC,total DESC,ip LIMIT 10`, string(payload), time.Now().UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +143,7 @@ func (s *Store) DelayRanking(ctx context.Context, active []liveDelay) ([]IPDelay
 	out := []IPDelay{}
 	for rows.Next() {
 		var item IPDelay
-		if err = rows.Scan(&item.IP, &item.DelayedMS, &item.LongestMS); err != nil {
+		if err = rows.Scan(&item.IP, &item.DelayedMS, &item.LongestMS, &item.LongestConnectionID, &item.MaxDelayedMS); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

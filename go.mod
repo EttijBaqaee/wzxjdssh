@@ -3,6 +3,8 @@ module wzxjdssh
 go 1.27.0
 
 require (
+	github.com/maxmind/mmdbwriter v1.0.0
+	github.com/oschwald/maxminddb-golang v1.13.1
 	golang.org/x/crypto v0.58.0
 	modernc.org/sqlite v1.61.0
 )
@@ -13,6 +15,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	go4.org/netipx v0.0.0-20220812043211-3cc044ffd68d // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

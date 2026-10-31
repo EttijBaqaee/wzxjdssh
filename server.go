@@ -37,6 +37,7 @@ type rateBucket struct {
 }
 
 type Server struct {
+	admissionMu    sync.Mutex
 	mu             sync.Mutex
 	emergencyMu    sync.Mutex
 	emergencyUntil time.Time
@@ -284,101 +285,115 @@ func (s *Server) acceptLoop(l net.Listener) {
 			continue
 		}
 		backoff = 0
-		s.mu.Lock()
-		held := time.Now().Before(s.emergencyUntil)
-		if held {
-			s.stats.emergencyRejected.Add(1)
-		}
-		s.mu.Unlock()
-		if held {
-			s.stats.rejected.Add(1)
-			raw.Close()
-			continue
-		}
-		ip, _, _ := net.SplitHostPort(raw.RemoteAddr().String())
-		if parsed := net.ParseIP(ip); parsed != nil {
-			ip = parsed.String()
-		}
-		var probeUntil int64
-		if s.store != nil && s.cfg.Load().Mode == "ssh" {
-			probeUntil, err = s.store.ProbeCooldown(ip, time.Now())
-			if err != nil {
-				s.storageError(err)
-				raw.Close()
-				continue
-			}
-		}
-		s.mu.Lock()
-		cfg := *s.cfg.Load()
-		reason := s.admit(ip, cfg)
-		var victims []*clientConn
-		if reason == "" && probeUntil > 0 {
-			if len(s.clients) >= cfg.MaxClients {
-				reason = "max_clients"
-			} else if cfg.MaxClientsPerIP > 0 && s.ipCount[ip] >= cfg.MaxClientsPerIP {
-				reason = "per_ip_limit"
-			}
-		}
-		if reason == "" && probeUntil == 0 {
-			victims, reason = s.capacityVictimsLocked(ip, cfg)
-		}
-		if reason != "" {
-			s.stats.rejected.Add(1)
-			s.mu.Unlock()
-			raw.Close()
-			s.log(2, "rejected", map[string]any{"peer": raw.RemoteAddr().String(), "reason": reason})
-			if s.store != nil && reason != "emergency_drop" {
-				s.storageError(s.store.Reject(raw.RemoteAddr().String(), ip, cfg.Mode, reason))
-			}
-			continue
-		}
-		for _, victim := range victims {
-			victim.capacityEvicted.Store(true)
-			s.stats.evicted.Add(1)
-			victim.cancel()
-			victim.Conn.Close()
-		}
-		if len(victims) > 0 {
-			// Wait for actual resource release without holding the server lock.
-			// This accept loop is the sole admission writer, so no slot is stolen.
-			s.mu.Unlock()
-			for _, victim := range victims {
-				<-victim.done
-			}
-			s.mu.Lock()
-			if s.stopping {
-				s.mu.Unlock()
-				raw.Close()
-				return
-			}
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		c := &clientConn{Conn: raw, server: s, cfg: cfg, ip: ip, started: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), probeUntil: probeUntil}
-		if probeUntil == 0 {
-			c.startLifetime()
-		}
-		if cfg.Mode == "ssh" && probeUntil == 0 {
-			c.pending.Store(true)
-			s.stats.pending.Add(1)
-		}
-		s.clients[c] = struct{}{}
-		if probeUntil == 0 {
-			s.detectParallelLocked(c)
-		}
-		s.ipCount[ip]++
-		s.stats.active.Add(1)
-		s.stats.accepted.Add(1)
-		s.wg.Add(1)
-		s.mu.Unlock()
-		if probeUntil == 0 {
-			if err := s.applyParallelPolicy(c); err != nil {
-				s.storageError(err)
-				c.cancel()
-			}
-		}
-		s.log(1, "accepted", map[string]any{"peer": raw.RemoteAddr().String(), "mode": cfg.Mode, "active": s.stats.active.Load()})
-		go s.handle(c)
+		s.acceptConnection(raw)
 	}
+}
+
+func (s *Server) acceptConnection(raw net.Conn) {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	s.mu.Lock()
+	stopping := s.stopping
+	s.mu.Unlock()
+	if stopping {
+		raw.Close()
+		return
+	}
+	s.mu.Lock()
+	held := time.Now().Before(s.emergencyUntil)
+	if held {
+		s.stats.emergencyRejected.Add(1)
+	}
+	s.mu.Unlock()
+	if held {
+		s.stats.rejected.Add(1)
+		raw.Close()
+		return
+	}
+	ip, _, _ := net.SplitHostPort(raw.RemoteAddr().String())
+	if parsed := net.ParseIP(ip); parsed != nil {
+		ip = parsed.String()
+	}
+	var probeUntil int64
+	var err error
+	if s.store != nil && s.cfg.Load().Mode == "ssh" {
+		probeUntil, err = s.store.ProbeCooldown(ip, time.Now())
+		if err != nil {
+			s.storageError(err)
+			raw.Close()
+			return
+		}
+	}
+	s.mu.Lock()
+	cfg := *s.cfg.Load()
+	reason := s.admit(ip, cfg)
+	var victims []*clientConn
+	if reason == "" && probeUntil > 0 {
+		if len(s.clients) >= cfg.MaxClients {
+			reason = "max_clients"
+		} else if cfg.MaxClientsPerIP > 0 && s.ipCount[ip] >= cfg.MaxClientsPerIP {
+			reason = "per_ip_limit"
+		}
+	}
+	if reason == "" && probeUntil == 0 {
+		victims, reason = s.capacityVictimsLocked(ip, cfg)
+	}
+	if reason != "" {
+		s.stats.rejected.Add(1)
+		s.mu.Unlock()
+		raw.Close()
+		s.log(2, "rejected", map[string]any{"peer": raw.RemoteAddr().String(), "reason": reason})
+		if s.store != nil && reason != "emergency_drop" {
+			s.storageError(s.store.Reject(raw.RemoteAddr().String(), ip, cfg.Mode, reason))
+		}
+		return
+	}
+	for _, victim := range victims {
+		victim.capacityEvicted.Store(true)
+		s.stats.evicted.Add(1)
+		victim.cancel()
+		victim.Conn.Close()
+	}
+	if len(victims) > 0 {
+		// Wait for actual resource release without holding the server lock.
+		// This accept loop is the sole admission writer, so no slot is stolen.
+		s.mu.Unlock()
+		for _, victim := range victims {
+			<-victim.done
+		}
+		s.mu.Lock()
+		if s.stopping {
+			s.mu.Unlock()
+			raw.Close()
+			return
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &clientConn{Conn: raw, server: s, cfg: cfg, ip: ip, started: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), probeUntil: probeUntil}
+	if probeUntil == 0 {
+		c.startLifetime()
+	}
+	if cfg.Mode == "ssh" && probeUntil == 0 {
+		c.pending.Store(true)
+		s.stats.pending.Add(1)
+	}
+	s.clients[c] = struct{}{}
+	if probeUntil == 0 {
+		s.detectParallelLocked(c)
+	}
+	s.ipCount[ip]++
+	s.stats.active.Add(1)
+	s.stats.accepted.Add(1)
+	s.wg.Add(1)
+	s.mu.Unlock()
+	if probeUntil == 0 {
+		if err := s.applyParallelPolicy(c); err != nil {
+			s.storageError(err)
+			c.cancel()
+		}
+	}
+	s.log(1, "accepted", map[string]any{"peer": raw.RemoteAddr().String(), "mode": cfg.Mode, "active": s.stats.active.Load()})
+	go s.handle(c)
 }
 
 type clientConn struct {
@@ -401,6 +416,7 @@ type clientConn struct {
 	peer                peerWatch
 	peerUnresponsive    atomic.Bool
 	emergencyEvicted    atomic.Bool
+	credentialState     atomic.Uint32
 	attemptCount        int
 	firstAuthMethod     string
 	rejectedAuth        bool
@@ -501,6 +517,8 @@ func (c *clientConn) Write(p []byte) (int, error) {
 }
 
 func (s *Server) handle(c *clientConn) {
+	stopCredentialWatch := c.credentialWatch()
+	defer stopCredentialWatch()
 	defer close(c.done)
 	defer s.wg.Done()
 	defer func() {
@@ -573,6 +591,9 @@ func (s *Server) handle(c *clientConn) {
 		if !stopping && c.peerUnresponsive.Load() && !c.capacityEvicted.Load() {
 			status, reason = "simulated_closed", "ssh_keepalive_timeout"
 		}
+		if c.cfg.Mode == "ssh" && c.probeUntil == 0 && c.credentialState.Load() != credentialSubmitted && !stopping && !c.emergencyEvicted.Load() && !c.capacityEvicted.Load() {
+			status, reason = "probe_detected", "no_credentials"
+		}
 		if c.probeUntil > 0 {
 			status, reason = "probe_blocked", "probe_cooldown"
 		}
@@ -598,7 +619,7 @@ func (s *Server) handle(c *clientConn) {
 				}
 			}
 			s.storageError(s.store.finish(c.recordID, duration, status, reason, c.bytesSent.Load(), c.bytesReceived.Load(), delayed))
-			if !stopping && c.probeUntil == 0 && c.cfg.Mode == "ssh" {
+			if !stopping && c.probeUntil == 0 && c.cfg.Mode == "ssh" && reason != "no_credentials" {
 				_, err := s.store.ProbeResult(c.recordID, c.ip, reason == "handshake_incomplete", time.Now(), c.cfg)
 				s.storageError(err)
 			}
@@ -717,6 +738,9 @@ func (s *Server) handle(c *clientConn) {
 		return denied
 	}
 	record := func(meta ssh.ConnMetadata, method string, credential []byte, key ssh.PublicKey) (int64, error) {
+		if err := c.submittedCredential(meta.User()); err != nil {
+			return 0, err
+		}
 		c.attemptCount++
 		if c.attemptCount == 1 {
 			c.firstAuthMethod = method
@@ -877,7 +901,7 @@ func (s *Server) Snapshot() map[string]any {
 	}
 	cfg := s.cfg.Load()
 	live := s.liveSnapshotLocked(time.Now())
-	strategy := map[string]any{"mode": cfg.Mode, "delay_ms": cfg.Delay.Milliseconds(), "client_cooldown_ms": clientCooldown.Milliseconds(), "max_line_length": cfg.MaxLineLength, "max_auth_tries": cfg.MaxAuthTries, "handshake_timeout_ms": cfg.HandshakeTimeout.Milliseconds(), "idle_timeout_ms": cfg.IdleTimeout.Milliseconds(), "max_connection_time_ms": cfg.MaxConnectionTime.Milliseconds(), "max_clients": cfg.MaxClients, "max_clients_per_ip": cfg.MaxClientsPerIP, "connections_per_minute": cfg.ConnectionsPerMinute, "max_pending_handshakes": cfg.MaxPendingHandshakes}
+	strategy := map[string]any{"mode": cfg.Mode, "delay_ms": cfg.Delay.Milliseconds(), "client_cooldown_ms": clientCooldown.Milliseconds(), "max_line_length": cfg.MaxLineLength, "max_auth_tries": cfg.MaxAuthTries, "handshake_timeout_ms": cfg.HandshakeTimeout.Milliseconds(), "credential_timeout_ms": cfg.CredentialTimeout.Milliseconds(), "idle_timeout_ms": cfg.IdleTimeout.Milliseconds(), "max_connection_time_ms": cfg.MaxConnectionTime.Milliseconds(), "max_clients": cfg.MaxClients, "max_clients_per_ip": cfg.MaxClientsPerIP, "connections_per_minute": cfg.ConnectionsPerMinute, "max_pending_handshakes": cfg.MaxPendingHandshakes}
 	strategy["cooldown_return_mode"] = "network_jitter"
 	strategy["slow_connection_lifetime"] = "unlimited"
 	strategy["max_connection_time_ms"] = int64(0)

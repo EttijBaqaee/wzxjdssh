@@ -75,7 +75,7 @@ func (s *Server) liveSnapshotLocked(now time.Time) LiveStats {
 		}
 		ips[c.ip] = ip
 		if c.recordID != 0 {
-			live.measured = append(live.measured, liveDelay{ID: c.recordID, DelayedMS: elapsed.Milliseconds()})
+			live.measured = append(live.measured, liveDelay{ID: c.recordID, DelayedMS: elapsed.Milliseconds(), DurationMS: now.Sub(c.started).Milliseconds()})
 		}
 		live.LongestConnections = append(live.LongestConnections, LiveConnection{ConnectionID: c.recordID, IP: c.ip, Peer: c.RemoteAddr().String(), Mode: c.cfg.Mode, StartedAt: c.started.UnixMilli(), DurationMS: now.Sub(c.started).Milliseconds(), DelayedMS: elapsed.Milliseconds(), Delaying: delaying})
 	}

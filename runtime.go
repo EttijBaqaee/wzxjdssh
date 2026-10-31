@@ -10,6 +10,7 @@ import (
 )
 
 type RuntimeConfig struct {
+	Geo           GeoConfig
 	DatabasePath  string
 	RetentionDays int
 	DatabaseMaxMB int64
@@ -74,6 +75,11 @@ func runtimeConfig() (RuntimeConfig, error) {
 	}
 	if c.DatabasePath == "" {
 		return c, errors.New("WZXJDSSH_DATABASE_PATH cannot be empty")
+	}
+	var geoErr error
+	c.Geo, geoErr = geoConfig(c.DatabasePath, os.Getenv)
+	if geoErr != nil {
+		return c, geoErr
 	}
 	if c.WebEnabled {
 		if len(c.AdminPassword) < 12 {

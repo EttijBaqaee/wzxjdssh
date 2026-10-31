@@ -102,8 +102,20 @@ func TestCapacityReplacesOldestSlowAndRecordsReason(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		next := connect(t, cfg)
 		bannerLine(t, next)
+		peer := next.LocalAddr().String()
 		next.Close()
-		eventually(t, func() bool { return s.stats.active.Load() <= 2 })
+		// Wait for this worker to release its slot; a count of two can still
+		// include the just-closed connection during asynchronous cleanup.
+		eventually(t, func() bool {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			for c := range s.clients {
+				if c.RemoteAddr().String() == peer {
+					return false
+				}
+			}
+			return true
+		})
 	}
 	if s.stats.active.Load() > 2 || s.stats.rejected.Load() != 0 {
 		t.Fatal("capacity accounting", s.Snapshot())

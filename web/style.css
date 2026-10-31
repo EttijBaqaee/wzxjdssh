@@ -23,7 +23,8 @@ main{padding-top:24px;padding-bottom:20px}.page-intro{margin-bottom:12px}.tabs{m
 /* Each row fits its tallest card; grid stretch keeps sibling cards aligned. */
 .overview-rankings{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
 .rank-group{min-width:0}.rank-group:first-child{grid-column:1/-1}.rank-group-title{font-size:12px;color:var(--muted);margin:0 0 6px;padding-left:2px}
-.rank-group-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.rank-group:first-child .rank-group-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.rank-group-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.client-rank-list .rank-name{white-space:normal;overflow-wrap:anywhere;word-break:break-word;min-width:0}
 .overview-rankings .panel{height:auto;min-height:140px;display:flex;flex-direction:column;min-width:0;overflow:visible}.overview-rankings .panel>h2,.overview-rankings .panel>p{flex-shrink:0}
 .overview-rankings .rank-list{flex:none;min-height:0;overflow:visible;padding-right:0}
 @media(max-width:700px){.rank-group .rank-group-grid,.rank-group:first-child .rank-group-grid{grid-template-columns:minmax(0,1fr)}}
@@ -33,3 +34,4 @@ main{padding-top:24px;padding-bottom:20px}.page-intro{margin-bottom:12px}.tabs{m
 .cards{grid-template-columns:repeat(5,minmax(0,1fr))}.card-hint{font-size:10px;line-height:1.5;color:var(--muted);margin-top:8px;overflow-wrap:anywhere}.card .value{overflow-wrap:anywhere}.card:has(.label):nth-child(5) .value{font-size:22px;letter-spacing:-.5px}@media(max-width:1100px){.cards{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:700px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .emergency-panel{margin-bottom:12px}.emergency-panel button.danger{background:#a33434;color:#fff;max-width:100%;white-space:normal}.emergency-panel button:disabled{opacity:.6;cursor:not-allowed}#emergency-status{overflow-wrap:anywhere}
+.ip-geo{display:block;font-family:system-ui,sans-serif;font-size:11px;line-height:1.5;font-weight:400;color:var(--muted);white-space:normal;overflow-wrap:anywhere;margin-top:3px}.rank-source-name{white-space:normal;overflow:visible;overflow-wrap:anywhere}.ipdb-panel,.database-panel{margin-bottom:12px}.ipdb-row{display:grid;grid-template-columns:140px 150px minmax(0,1fr);gap:6px 12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:12px;overflow-wrap:anywhere}.database-panel .danger,#clear-db-form .danger{background:#a33434;color:#fff;white-space:normal}#clear-db-dialog{max-width:560px}#clear-db-form button{margin-top:16px}#clear-db-dialog input{margin-top:8px}@media(max-width:600px){.ipdb-row{grid-template-columns:1fr}.ipdb-panel .panel-heading{flex-wrap:wrap;gap:8px}}

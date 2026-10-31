@@ -1,6 +1,6 @@
 services:
   wzxjdssh:
-    image: ghcr.io/ettijbaqaee/wzxjdssh:2.0.4
+    image: ghcr.io/ettijbaqaee/wzxjdssh:2.0.5
     pull_policy: missing
     container_name: wzxjdssh
     restart: unless-stopped
@@ -33,6 +33,14 @@ services:
       WZXJDSSH_SINGLE_AUTH_RETRY_WINDOW_MS: "${WZXJDSSH_SINGLE_AUTH_RETRY_WINDOW_MS:-900000}"
       WZXJDSSH_SINGLE_AUTH_RETRY_COOLDOWN_MS: "${WZXJDSSH_SINGLE_AUTH_RETRY_COOLDOWN_MS:-3600000}"
       WZXJDSSH_PARALLEL_COOLDOWN_MS: "${WZXJDSSH_PARALLEL_COOLDOWN_MS:-3600000}"
+      # 按单条连接判断；超时仍未提交凭据只释放当前连接，不给 IP 加标签。
+      WZXJDSSH_CREDENTIAL_TIMEOUT_MS: "${WZXJDSSH_CREDENTIAL_TIMEOUT_MS:-20000}"
+      # 三库保存在 records 卷的 ipdb/ 中；首次后台下载，不阻塞 SSH。
+      WZXJDSSH_IPDB_ENABLED: "${WZXJDSSH_IPDB_ENABLED:-true}"
+      WZXJDSSH_IPDB_AUTO_UPDATE: "${WZXJDSSH_IPDB_AUTO_UPDATE:-true}"
+      WZXJDSSH_IPDB_UPDATE_DAYS: "${WZXJDSSH_IPDB_UPDATE_DAYS:-45}"
+      WZXJDSSH_IPDB_CACHE_SIZE: "${WZXJDSSH_IPDB_CACHE_SIZE:-300}"
+      WZXJDSSH_IPDB_CACHE_TTL_SECONDS: "${WZXJDSSH_IPDB_CACHE_TTL_SECONDS:-300}"
       WZXJDSSH_HANDSHAKE_TIMEOUT_MS: "${WZXJDSSH_HANDSHAKE_TIMEOUT_MS:-20000}"
       # 仿真连接存活核验；不计入服务端故意延迟，每连接最多一个待回复请求。
       WZXJDSSH_SSH_KEEPALIVE_INTERVAL_MS: "${WZXJDSSH_SSH_KEEPALIVE_INTERVAL_MS:-60000}"

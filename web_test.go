@@ -50,18 +50,28 @@ func TestAdminUsernameEmptyDefaultsAndCustomLogin(t *testing.T) {
 	for _, name := range []string{"", "admin", "custom-admin"} {
 		t.Setenv("WZXJDSSH_ADMIN_USERNAME", name)
 		cfg, err := runtimeConfig()
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		want := name
-		if want == "" { want = "admin" }
-		if cfg.AdminUsername != want { t.Fatal(cfg.AdminUsername, want) }
+		if want == "" {
+			want = "admin"
+		}
+		if cfg.AdminUsername != want {
+			t.Fatal(cfg.AdminUsername, want)
+		}
 		w, err := NewWeb(cfg, testStore(t), nil)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		body, _ := json.Marshal(map[string]string{"username": want, "password": cfg.AdminPassword})
 		r := httptest.NewRequest("POST", "http://example.test/api/login", strings.NewReader(string(body)))
 		r.Header.Set("Content-Type", "application/json")
 		rw := httptest.NewRecorder()
 		w.Handler().ServeHTTP(rw, r)
-		if rw.Code != 200 { t.Fatal(name, rw.Code, rw.Body.String()) }
+		if rw.Code != 200 {
+			t.Fatal(name, rw.Code, rw.Body.String())
+		}
 	}
 }
 

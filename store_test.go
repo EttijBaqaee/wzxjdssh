@@ -218,7 +218,7 @@ func TestRecordedHandshakeTimeout(t *testing.T) {
 	defer conn.Close()
 	eventually(t, func() bool {
 		p, e := store.List(context.Background(), RecordFilter{})
-		return e == nil && len(p.Items) == 1 && p.Items[0].Status == "timeout" && p.Items[0].Reason == "handshake_timeout"
+		return e == nil && len(p.Items) == 1 && p.Items[0].Status == "probe_detected" && p.Items[0].Reason == "no_credentials" && p.Items[0].ClientMark == ""
 	})
 }
 

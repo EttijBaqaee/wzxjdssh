@@ -4,9 +4,9 @@
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后先进行自适应随机等待，再收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
 
-当前版本：**2.0.4**
+当前版本：**2.0.5**
 
-镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.0.4`（Linux amd64），同时提供 `latest` 标签。
+镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.0.5`（Linux amd64），同时提供 `latest` 标签。
 
 ## 工作原理
 
@@ -37,7 +37,7 @@
 - 内置 SQLite，记录连接状态、来源、时间、时长、客户端标识和认证尝试，默认保留 90 天。
 - 记录用户名、密码、keyboard-interactive 回答，以及客户端提交的公钥正文和 SHA256 指纹；SSH 不传输客户端私钥，公钥探测也不证明持有对应私钥。
 - 内置中文 Web UI：统计概览、最近 30 天趋势、来源/用户名/认证方式排行、连接筛选和详情。
-- 新增密码 TOP 10、单 IP 最长实际拖延 TOP 10；后者保留已结束连接的实测值，显示每个 IP 的最长单次拖延和累计拖延。
+- 密码 TOP 10、单 IP 最长连接持续时间 TOP 10；最长连接持续时间与累计实际拖延分别显示。
 - 连接记录按 IP 汇总，展开后保留每次连接、来源端口与认证详情；主表和展开表均支持最新一页、最旧一页。
 - 可选数据库容量上限；超过后按最旧连接清理认证记录并回收 SQLite 文件空间，留空或 0 时不启用容量清理。
 - Web UI 管理员密码通过编排设置，支持路径前缀及 HTTP/HTTPS 反代。
@@ -51,12 +51,12 @@
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.4`，无需自行构建。
+1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.5`，无需自行构建。
 2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`；缺少镜像时会自动拉取。
 3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
-编排使用 `pull_policy: missing`，固定到 `2.0.4` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.0.4`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像，测试工具不会进入最终镜像。
+编排使用 `pull_policy: missing`，固定到 `2.0.5` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.0.5`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像，测试工具不会进入最终镜像。
 
 ### 常用编排参数
 
@@ -81,8 +81,8 @@
 | `WZXJDSSH_DELAY_JITTER_PERCENT` | `10` | 普通认证、横幅、并发慢速响应的随机扰动，0–50% |
 | `WZXJDSSH_PARALLEL_WINDOW_MS` | `60000` | 同 IP 重叠连接判定窗口，1–3600000 毫秒 |
 | `WZXJDSSH_PARALLEL_CONNECTIONS` | `2` | 触发并发慢速策略的重叠连接数，2–100000 |
-| `WZXJDSSH_PROBE_FAILURE_THRESHOLD` | `3` | 同 IP 连续握手未完成阈值，1–100000 |
-| `WZXJDSSH_PROBE_COOLDOWN_MS` | `900000` | 探针静默冷却，1–86400000 毫秒；期间重连不续期 |
+| `WZXJDSSH_PROBE_FAILURE_THRESHOLD` | `3` | 旧版 IP 探针兼容参数，1–100000；新无凭据规则不累计此计数 |
+| `WZXJDSSH_PROBE_COOLDOWN_MS` | `900000` | 旧版 IP 探针冷却参数，1–86400000 毫秒；新规则不创建此冷却 |
 | `WZXJDSSH_SINGLE_AUTH_RETRY_THRESHOLD` | `3` | 连续单次密码拒绝后退出的阈值；0 禁用，范围 0–100000 |
 | `WZXJDSSH_SINGLE_AUTH_RETRY_WINDOW_MS` | `900000` | 连续计数窗口，1–86400000 毫秒；按 IP 和完整 SSH 标识区分 |
 | `WZXJDSSH_SINGLE_AUTH_RETRY_COOLDOWN_MS` | `3600000` | 触发后的冷却，1–604800000 毫秒；重连不续期 |
@@ -117,9 +117,9 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 
 同 IP 并发标记在最后一条连接断开后默认闲置 1 小时冷却，期间重连重新计时；历史连接标签保留。
 
-升级至 2.0.4 时，拉取新镜像并将编排标签改为 `2.0.4`，重建容器，保留数据卷。
+升级至 2.0.5 时，拉取新镜像并将编排标签改为 `2.0.5`，重建容器，保留数据卷。
 
-同一来源 IP 连续 3 次以 `handshake_incomplete` 结束连接，标记为握手探针，冷却 15 分钟。来源端口不影响累计；完成一次真实 SSH 握手会立即清零，其他结束原因也打断连续计数。按结果完成顺序统计。冷却期间不发送 SSH 横幅或任何 SSH 响应，读取并丢弃数据，到期关闭静默连接；期间重连不延长冷却，重启保留原到期时间。静默连接仍受容量和速率限制，容量不足时关闭新 TCP 连接，不挤掉旧慢速连接。规则仅适用于 SSH 诱捕入口。
+2.0.5 的无凭据探针按单条连接处理，默认提交期限为 20 秒；提前断开也只记录当前连接，不累计 IP 探针次数、不创建 IP 冷却。同 IP 已提交凭据的其他连接继续正常策略。升级前已存在的 IP 探针标签仅兼容至原到期时间，不续期。
 
 ## 默认配置
 
@@ -139,8 +139,8 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 | `MaxPendingHandshakes` | 128 | 同时进行的 SSH 握手上限 |
 | `MaxAuthTries` | 0 | 单连接认证失败次数上限；0 不限次数 |
 | `ParallelCooldown` | 3600000 | 同 IP 并发标记在最后连接断开后闲置冷却，重连重新计时 |
-| `ProbeFailureThreshold` | 3 | 同 IP 连续 handshake_incomplete 触发探针标记的次数 |
-| `ProbeCooldown` | 900000 | 探针静默冷却，毫秒；重连不延长 |
+| `ProbeFailureThreshold` | 3 | 旧版 IP 探针兼容配置；新无凭据规则不累计此计数 |
+| `ProbeCooldown` | 900000 | 旧版 IP 探针兼容配置；新无凭据规则不创建此冷却 |
 | `ParallelWindow` | 60000 | 同 IP 首次并发判定窗口，毫秒；闲置冷却单独设置 |
 | `ParallelConnections` | 2 | 窗口内重叠连接达到此数量后，对该 IP 全部连接使用慢速策略 |
 | `HandshakeTimeout` | 20000 | 版本交换和密钥交换超时 |
@@ -213,3 +213,28 @@ Web 管理会话默认闲置 1 小时自动退出，可在“管理设置”修�
 
 
 管理设置新增“释放全部连接 · 暂停 SSH 60 秒”：立即关闭本服务所有已接入 TCP 连接并取消 SSH 会话，60 秒内新 TCP 接入直接关闭，不发送 SSH 横幅、认证结果或协议断开消息；内核可能发送 FIN/RST。仅从应用层释放本服务连接，不修改防火墙，不新增容器权限，不影响 Web UI。重复点击不续期；倒计时属于当前进程，进程重启后重置。暂停期间新接入仅计数，不逐条写入 SQLite，避免刷拒绝记录。
+
+## 2.0.5 新增功能与升级
+
+- IP 归属使用本地 GeoLite2-City、GeoLite2-ASN、GeoCN 合并查询；补充中国行政区划、运营商及网络类型。来源列表、排行榜和连接详情直接显示，ASN 编号与组织在详情中展示。
+- 默认后台下载三库，已有库每 45 天更新；缺库或下载、校验失败时每 15 分钟重试，失败继续使用旧库。管理设置中可查看状态、手动更新。历史记录使用当前本地库解释，IP 定位不代表精确住址或攻击者身份。
+- 查询仅用于管理 API，不进入 SSH 处理流程。LRU 缓存默认最多 300 项，闲置 300 秒失效；IPv4、IPv6 和 IPv4 mapped IPv6 统一处理。
+- “单 IP · 最长拖延”主值使用每 IP 单次连接的最长持续时间，与连接详情一致，并提供最长连接入口；“累计实际拖延”另行显示服务端主动等待总和，两者不能混用。
+- “客户端标识 TOP 10”按完整 SSH 标识统计连接次数，每条连接只计一次，不随认证重试累加；未采集到标识的不入榜。长标识完整换行显示，手机单列。
+- 未提交凭据的连接按单条连接判定。默认从 TCP 接入起 20 秒内没有提交带用户名的密码、公钥或交互回答即释放；`none` 认证、只握手或仅发起交互挑战不算提交。该规则不写 IP 冷却、不累计同 IP 探针次数，也不影响同 IP 的其他连接。必要握手与认证方法协商仍会响应，判定后不发送 SSH 拒绝/断开内容，关闭 socket 时内核可能发送 FIN/RST。已提交凭据的连接继续原有拖延策略。
+- 管理设置增加清库按钮：警告弹框内输入当前管理员密码确认。清空连接、认证尝试、统计与客户端标签，先释放当前连接、暂停 SSH 接入 60 秒，等待旧工作协程结束后在原库中事务删除并回收空间。保留管理设置、主机密钥、IP 库和管理员登录会话；无法撤销，操作前自行备份。
+
+| 新参数 | 默认值 | 范围 / 作用 |
+| --- | --- | --- |
+| `WZXJDSSH_CREDENTIAL_TIMEOUT_MS` | `20000` | 1–3600000；单连接凭据提交期限（毫秒） |
+| `WZXJDSSH_IPDB_ENABLED` | `true` | 启用本地 IP 归属查询 |
+| `WZXJDSSH_IPDB_DIRECTORY` | SQLite 同目录下 `ipdb/` | 必须位于可写持久化挂载内 |
+| `WZXJDSSH_IPDB_AUTO_UPDATE` | `true` | 自动更新，关闭后仍可手动更新 |
+| `WZXJDSSH_IPDB_UPDATE_DAYS` | `45` | 1–365；按本地文件更新时间判断过期 |
+| `WZXJDSSH_IPDB_CACHE_SIZE` | `300` | 1–10000；缓存项数上限 |
+| `WZXJDSSH_IPDB_CACHE_TTL_SECONDS` | `300` | 1–86400；缓存闲置失效秒数 |
+| `WZXJDSSH_IPDB_CITY_URL` / `ASN_URL` / `GEOCN_URL` | PBH-BTN/GeoLite.mmdb | 分别下载三库；自定义时填写完整 HTTPS raw MMDB 或 gzip URL |
+
+默认下载源为 [PBH-BTN/GeoLite.mmdb](https://github.com/PBH-BTN/GeoLite.mmdb/releases)，数据来自 MaxMind GeoLite2 与 ljxi/GeoCN。首次下载未完成时明确显示“归属数据库尚未就绪”，不阻塞 SSH；可离线将三库分别以 `GeoLite2-City.mmdb`、`GeoLite2-ASN.mmdb`、`GeoCN.mmdb` 放入 `ipdb/` 并关闭自动更新。
+
+已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.5` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。

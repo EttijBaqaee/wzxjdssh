@@ -24,6 +24,7 @@ type Store struct {
 	capacityDeleted atomic.Uint64
 }
 type ConnectionRecord struct {
+	Geo           IPAttribution `json:"geo"`
 	ID            int64         `json:"id"`
 	Peer          string        `json:"peer"`
 	IP            string        `json:"ip"`
@@ -78,19 +79,20 @@ type DailyPoint struct {
 	Attempts    int64  `json:"attempts"`
 }
 type StoredStats struct {
-	Connections  int64        `json:"connections"`
-	Active       int64        `json:"active"`
-	Attempts     int64        `json:"attempts"`
-	UniqueIPs    int64        `json:"unique_ips"`
-	Rejected     int64        `json:"rejected"`
-	AuthRejected int64        `json:"auth_rejected"`
-	ProbeBlocked int64        `json:"probe_blocked"`
-	Today        int64        `json:"today"`
-	Sources      []Ranking    `json:"sources"`
-	Usernames    []Ranking    `json:"usernames"`
-	Passwords    []Ranking    `json:"passwords"`
-	Methods      []Ranking    `json:"methods"`
-	Daily        []DailyPoint `json:"daily"`
+	Connections    int64        `json:"connections"`
+	Active         int64        `json:"active"`
+	Attempts       int64        `json:"attempts"`
+	UniqueIPs      int64        `json:"unique_ips"`
+	Rejected       int64        `json:"rejected"`
+	AuthRejected   int64        `json:"auth_rejected"`
+	ProbeBlocked   int64        `json:"probe_blocked"`
+	Today          int64        `json:"today"`
+	Sources        []Ranking    `json:"sources"`
+	Usernames      []Ranking    `json:"usernames"`
+	Passwords      []Ranking    `json:"passwords"`
+	Methods        []Ranking    `json:"methods"`
+	ClientVersions []Ranking    `json:"client_versions"`
+	Daily          []DailyPoint `json:"daily"`
 }
 
 func OpenStore(path string, parallelCooldown ...time.Duration) (*Store, error) {
@@ -472,7 +474,7 @@ func (s *Store) Detail(ctx context.Context, id int64) (ConnectionRecord, []AuthR
 	return c, attempts, rows.Err()
 }
 func (s *Store) Stats(ctx context.Context) (StoredStats, error) {
-	out := StoredStats{Sources: []Ranking{}, Usernames: []Ranking{}, Passwords: []Ranking{}, Methods: []Ranking{}, Daily: []DailyPoint{}}
+	out := StoredStats{Sources: []Ranking{}, Usernames: []Ranking{}, Passwords: []Ranking{}, Methods: []Ranking{}, ClientVersions: []Ranking{}, Daily: []DailyPoint{}}
 	today := time.Now().UTC().Truncate(24 * time.Hour).UnixMilli()
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(ended_at IS NULL),0),COUNT(DISTINCT ip),COALESCE(SUM(status='rejected'),0),COALESCE(SUM(started_at>=?),0) FROM connections`, today).Scan(&out.Connections, &out.Active, &out.UniqueIPs, &out.Rejected, &out.Today)
 	if err != nil {
@@ -494,6 +496,7 @@ func (s *Store) Stats(ctx context.Context) (StoredStats, error) {
 		{`SELECT ip,COUNT(*) AS n FROM connections GROUP BY ip ORDER BY n DESC,ip LIMIT 10`, &out.Sources},
 		{`SELECT username,COUNT(*) AS n FROM auth_attempts GROUP BY username ORDER BY n DESC,username LIMIT 10`, &out.Usernames},
 		{`SELECT method,COUNT(*) AS n FROM auth_attempts GROUP BY method ORDER BY n DESC,method LIMIT 10`, &out.Methods},
+		{`SELECT client_version,COUNT(*) AS n FROM connections WHERE client_version<>'' GROUP BY client_version ORDER BY n DESC,client_version LIMIT 10`, &out.ClientVersions},
 		{`WITH passwords AS (
 		 SELECT credential AS password,encoding FROM auth_attempts WHERE method='password' AND truncated=0
 		 UNION ALL

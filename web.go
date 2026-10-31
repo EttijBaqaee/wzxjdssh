@@ -26,20 +26,28 @@ import (
 var webFiles embed.FS
 
 type Web struct {
-	cfg        RuntimeConfig
-	store      *Store
-	snapshot   func() map[string]any
-	emergency  *Server
-	liveDetail func(int64) (LiveRecordSnapshot, bool)
-	secret     [32]byte
-	password   [32]byte
-	server     *http.Server
-	errors     chan error
-	mu         sync.Mutex
-	failures   map[string]loginFailures
-	sessions   map[[32]byte]time.Time
-	idleNanos  atomic.Int64
-	settingsMu sync.Mutex
+	clearMu           sync.Mutex
+	clearStatus       DatabaseClearStatus
+	clearCancel       context.CancelFunc
+	clearWG           sync.WaitGroup
+	clearClosing      bool
+	clearFailures     int
+	clearFailureUntil time.Time
+	geo               *GeoDB
+	cfg               RuntimeConfig
+	store             *Store
+	snapshot          func() map[string]any
+	emergency         *Server
+	liveDetail        func(int64) (LiveRecordSnapshot, bool)
+	secret            [32]byte
+	password          [32]byte
+	server            *http.Server
+	errors            chan error
+	mu                sync.Mutex
+	failures          map[string]loginFailures
+	sessions          map[[32]byte]time.Time
+	idleNanos         atomic.Int64
+	settingsMu        sync.Mutex
 }
 type loginFailures struct {
 	Count int
@@ -81,6 +89,13 @@ func (w *Web) Start() error {
 	return nil
 }
 func (w *Web) Close() {
+	w.clearMu.Lock()
+	w.clearClosing = true
+	if w.clearCancel != nil {
+		w.clearCancel()
+	}
+	w.clearMu.Unlock()
+	defer w.clearWG.Wait()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if w.server.Shutdown(ctx) != nil {
@@ -207,6 +222,10 @@ func (w *Web) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/emergency", w.protected(w.emergencyState))
 	mux.HandleFunc("POST /api/emergency", w.protected(w.emergencyAction))
+	mux.HandleFunc("GET /api/ipdb", w.protected(w.geoState))
+	mux.HandleFunc("POST /api/ipdb/update", w.protected(w.geoUpdate))
+	mux.HandleFunc("GET /api/database/clear", w.protected(w.databaseClearState))
+	mux.HandleFunc("POST /api/database/clear", w.protected(w.databaseClearAction))
 	mux.HandleFunc("GET /api/settings", w.protected(w.settings))
 	mux.HandleFunc("POST /api/settings", w.protected(w.settings))
 	mux.HandleFunc("GET /api/stats", w.protected(w.stats))
@@ -228,6 +247,13 @@ func (w *Web) Handler() http.Handler {
 		rw.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		rw.Write(data)
 	})
+	for _, name := range []string{"geo.js", "admin.js"} {
+		mux.HandleFunc("GET /"+name, func(rw http.ResponseWriter, r *http.Request) {
+			data, _ := fs.ReadFile(files, name)
+			rw.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			rw.Write(data)
+		})
+	}
 	mux.HandleFunc("GET /theme.js", func(rw http.ResponseWriter, r *http.Request) {
 		data, _ := fs.ReadFile(files, "theme.js")
 		rw.Header().Set("Content-Type", "application/javascript; charset=utf-8")
@@ -371,7 +397,7 @@ func (w *Web) stats(rw http.ResponseWriter, r *http.Request) {
 		sendJSON(rw, 500, map[string]string{"error": "无法读取数据库容量"})
 		return
 	}
-	sendJSON(rw, 200, map[string]any{"stored": stats, "runtime": live, "ip_delays": delays, "total_delayed_ms": totalDelay, "database": map[string]any{"bytes": size, "max_bytes": w.store.maxBytes.Load(), "capacity_deleted": w.store.capacityDeleted.Load()}, "retention_days": w.cfg.RetentionDays, "timezone": "UTC"})
+	sendJSON(rw, 200, map[string]any{"ip_geo": w.statsGeo(stats, live, delays), "ipdb": w.geo.Status(), "stored": stats, "runtime": live, "ip_delays": delays, "total_delayed_ms": totalDelay, "database": map[string]any{"bytes": size, "max_bytes": w.store.maxBytes.Load(), "capacity_deleted": w.store.capacityDeleted.Load()}, "retention_days": w.cfg.RetentionDays, "timezone": "UTC"})
 }
 
 func (w *Web) settings(rw http.ResponseWriter, r *http.Request) {
@@ -443,6 +469,9 @@ func (w *Web) connections(rw http.ResponseWriter, r *http.Request) {
 		sendJSON(rw, 500, map[string]string{"error": "无法读取连接记录"})
 		return
 	}
+	for i := range out.Items {
+		out.Items[i].Geo = w.geo.Lookup(out.Items[i].IP)
+	}
 	sendJSON(rw, 200, out)
 }
 func (w *Web) ips(rw http.ResponseWriter, r *http.Request) {
@@ -458,6 +487,9 @@ func (w *Web) ips(rw http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		sendJSON(rw, 500, map[string]string{"error": "无法读取 IP 记录"})
 		return
+	}
+	for i := range out.Items {
+		out.Items[i].Geo = w.geo.Lookup(out.Items[i].IP)
 	}
 	sendJSON(rw, 200, out)
 }
@@ -492,5 +524,6 @@ func (w *Web) detail(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	c.Geo = w.geo.Lookup(c.IP)
 	sendJSON(rw, 200, map[string]any{"connection": c, "attempts": a})
 }

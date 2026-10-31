@@ -21,6 +21,10 @@ func TestProductionWebAndPersistence(t *testing.T) {
 		t.Skip("production Web target only available in Compose")
 	}
 	password := os.Getenv("WZXJDSSH_ADMIN_PASSWORD")
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Jar: jar, Timeout: 15 * time.Second}
 	get := func(path string, out any) {
@@ -96,7 +100,7 @@ func TestProductionWebAndPersistence(t *testing.T) {
 	get("api/stats", &before)
 	for i := 0; i < 3; i++ {
 		cmd := exec.Command(os.Getenv("WZX_TEST_BINARY"), "-health")
-		cmd.Env = append(os.Environ(), "WZXJDSSH_WEB_LISTEN=wzxjdssh:2223", "WZXJDSSH_WEB_BASE_PATH=/sshpanel")
+		cmd.Env = append(os.Environ(), "WZXJDSSH_WEB_LISTEN=wzxjdssh:2223", "WZXJDSSH_WEB_BASE_PATH="+baseURL.Path)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatal("health failed", err, string(out))
 		}

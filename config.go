@@ -40,6 +40,7 @@ type Config struct {
 	SingleAuthRetryCooldown  time.Duration
 	ParallelConnections      int
 	HandshakeTimeout         time.Duration
+	CredentialTimeout        time.Duration
 	IdleTimeout              time.Duration
 	WriteTimeout             time.Duration
 	SSHKeepaliveInterval     time.Duration
@@ -56,7 +57,7 @@ func DefaultConfig() Config {
 		CooldownAuthDelay: 10 * time.Second, CooldownAuthMin: 3 * time.Second, CooldownAuthMax: 15 * time.Second, CooldownAuthStep: time.Second, CooldownAuthJitter: 10,
 		MaxClients: 4096, MaxClientsPerIP: 64, ConnectionsPerMinute: 2048,
 		MaxPendingHandshakes: 128, MaxAuthTries: 0, ParallelWindow: time.Minute, ParallelCooldown: time.Hour, ParallelConnections: 2, HandshakeTimeout: 20 * time.Second,
-		IdleTimeout: 2 * time.Minute, WriteTimeout: 5 * time.Second, MaxConnectionTime: 0, ProbeCooldown: 15 * time.Minute, ProbeFailureThreshold: 3,
+		CredentialTimeout: 20 * time.Second, IdleTimeout: 2 * time.Minute, WriteTimeout: 5 * time.Second, MaxConnectionTime: 0, ProbeCooldown: 15 * time.Minute, ProbeFailureThreshold: 3,
 		SSHKeepaliveInterval: time.Minute, SSHKeepaliveTimeout: 30 * time.Second, SSHKeepaliveCountMax: 3,
 		SingleAuthRetryThreshold: 3, SingleAuthRetryWindow: 15 * time.Minute, SingleAuthRetryCooldown: time.Hour,
 		HostKeyDirectory: "/data", ServerVersion: "SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4", LogLevel: 0}
@@ -90,6 +91,7 @@ func (c Config) Validate() error {
 		{c.SingleAuthRetryCooldown >= time.Millisecond && c.SingleAuthRetryCooldown <= 7*24*time.Hour, "SingleAuthRetryCooldown must be 1..604800000 milliseconds"},
 		{c.ParallelConnections >= 2 && c.ParallelConnections <= 100000, "ParallelConnections must be 2..100000"},
 		{c.HandshakeTimeout >= time.Millisecond && c.HandshakeTimeout <= time.Hour, "HandshakeTimeout must be 1..3600000 milliseconds"},
+		{c.CredentialTimeout >= time.Millisecond && c.CredentialTimeout <= time.Hour, "CredentialTimeout must be 1..3600000 milliseconds"},
 		{c.IdleTimeout >= time.Millisecond && c.IdleTimeout <= 24*time.Hour, "IdleTimeout must be 1..86400000 milliseconds"},
 		{c.WriteTimeout >= time.Millisecond && c.WriteTimeout <= time.Minute, "WriteTimeout must be 1..60000 milliseconds"},
 		{c.MaxConnectionTime >= 0 && c.MaxConnectionTime <= 7*24*time.Hour, "MaxConnectionTime must be 0..604800000 milliseconds (0 means unlimited)"},
@@ -224,6 +226,8 @@ func parseConfig(r io.Reader) (Config, error) {
 			setInt(&c.ParallelConnections)
 		case "HandshakeTimeout":
 			setDuration(&c.HandshakeTimeout)
+		case "CredentialTimeout":
+			setDuration(&c.CredentialTimeout)
 		case "IdleTimeout":
 			setDuration(&c.IdleTimeout)
 		case "SSHKeepaliveInterval":
@@ -303,7 +307,7 @@ func configEnvironment(c Config, lookup func(string) string) (Config, error) {
 		{"DELAY_MS", &c.Delay}, {"PARALLEL_WINDOW_MS", &c.ParallelWindow},
 		{"PARALLEL_COOLDOWN_MS", &c.ParallelCooldown}, {"HANDSHAKE_TIMEOUT_MS", &c.HandshakeTimeout},
 		{"SSH_KEEPALIVE_INTERVAL_MS", &c.SSHKeepaliveInterval}, {"SSH_KEEPALIVE_TIMEOUT_MS", &c.SSHKeepaliveTimeout},
-		{"IDLE_TIMEOUT_MS", &c.IdleTimeout}, {"WRITE_TIMEOUT_MS", &c.WriteTimeout},
+		{"CREDENTIAL_TIMEOUT_MS", &c.CredentialTimeout}, {"IDLE_TIMEOUT_MS", &c.IdleTimeout}, {"WRITE_TIMEOUT_MS", &c.WriteTimeout},
 		{"MAX_CONNECTION_TIME_MS", &c.MaxConnectionTime},
 		{"PROBE_COOLDOWN_MS", &c.ProbeCooldown},
 		{"SINGLE_AUTH_RETRY_WINDOW_MS", &c.SingleAuthRetryWindow},

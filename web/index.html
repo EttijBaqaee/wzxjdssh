@@ -12,13 +12,6 @@
 <div id="cards" class="cards"></div>
 <section class="panel trend-panel"><div class="panel-heading"><div><h2>连接与认证趋势</h2><p class="muted">最近 30 天 · UTC 日期</p></div><div class="legend"><span class="legend-connection">连接</span><span class="legend-attempt">认证尝试</span></div></div><div id="trend" class="trend"></div></section>
 <div class="overview-rankings">
-<section class="rank-group" aria-labelledby="auth-rankings-title">
-<h2 class="rank-group-title" id="auth-rankings-title">认证尝试</h2><div class="rank-group-grid">
-<section class="panel"><h2>尝试用户名 · TOP 10</h2><ol id="rank-users" class="rank-list"></ol></section>
-<section class="panel"><h2>尝试密码 · TOP 10</h2><p class="muted">合并密码认证与交互认证的单个密码回答，按尝试次数排序。</p><ol id="rank-passwords" class="rank-list password-rank-list"></ol></section>
-<section class="panel"><h2>认证方式</h2><ol id="rank-methods" class="rank-list"></ol></section>
-<section class="panel"><h2>客户端标识 · TOP 10</h2><p class="muted">按连接次数统计完整 SSH 标识；未采集到标识的不计入。</p><ol id="rank-clients" class="rank-list client-rank-list"></ol></section>
-</div></section>
 <section class="rank-group" aria-labelledby="delay-rankings-title">
 <h2 class="rank-group-title" id="delay-rankings-title">实时连接</h2><div class="rank-group-grid">
 <section class="panel"><h2>在线连接 · 拖延时长 TOP 10</h2><p class="muted">按服务端累计延迟排序，包含当前等待；断开后移出。</p><ol id="rank-delays" class="rank-list live-rank-list"></ol></section>
@@ -28,6 +21,13 @@
 <h2 class="rank-group-title" id="source-rankings-title">历史来源</h2><div class="rank-group-grid">
 <section class="panel"><h2>单 IP · 最长拖延 TOP 10</h2><p class="muted">每个 IP 取单次连接的最长持续时间；包含在线和已结束连接，与连接详情口径一致。累计实际拖延另行显示。</p><ol id="rank-ip-delays" class="rank-list live-rank-list"></ol></section>
 <section class="panel"><h2>来源 IP · TOP 10</h2><ol id="rank-sources" class="rank-list"></ol></section>
+</div></section>
+<section class="rank-group" aria-labelledby="auth-rankings-title">
+<h2 class="rank-group-title" id="auth-rankings-title">认证尝试</h2><div class="rank-group-grid">
+<section class="panel"><h2>尝试用户名 · TOP 10</h2><ol id="rank-users" class="rank-list"></ol></section>
+<section class="panel"><h2>尝试密码 · TOP 10</h2><p class="muted">合并密码认证与交互认证的单个密码回答，按尝试次数排序。</p><ol id="rank-passwords" class="rank-list password-rank-list"></ol></section>
+<section class="panel"><h2>认证方式</h2><ol id="rank-methods" class="rank-list"></ol></section>
+<section class="panel"><h2>客户端标识 · TOP 10</h2><p class="muted">按连接次数统计完整 SSH 标识；未采集到标识的不计入。</p><ol id="rank-clients" class="rank-list client-rank-list"></ol></section>
 </div></section>
 </div><p id="storage-health" class="muted footnote"></p></section>
 <section id="connections-view" hidden><section class="panel"><form id="filter-form" class="filters"><label>来源 IP<input name="ip" placeholder="精确匹配 IP"></label><label>尝试用户名<input name="username" placeholder="精确匹配用户名"></label><label>连接状态<select name="status"><option value="">全部状态</option><option value="connected">已连接</option><option value="authenticating">认证中</option><option value="auth_rejected">认证拒绝</option><option value="closed">已关闭</option><option value="probe_detected">无凭据探针</option><option value="probe_blocked">探针静默丢弃</option><option value="handshake_failed">握手未完成</option><option value="rejected">接入拒绝</option><option value="timeout">连接超时</option><option value="capacity_evicted">容量回收</option><option value="interrupted">中断</option><option value="auth_interrupted">认证中断</option><option value="cooldown_auth_interrupted">冷却重连认证中断</option><option value="simulated_network">仿真网络迟滞</option><option value="simulated_closed">仿真会话结束</option><option value="simulated_disconnect">旧版仿真后断开</option></select></label><button type="submit">筛选</button><button type="reset" class="quiet">重置</button></form><p class="muted">按来源 IP 汇总，最近连接在前；筛选后只统计符合条件的连接。点击查看各次连接及认证内容。</p><div class="table-scroll"><table><thead><tr><th>来源 IP</th><th>连接次数</th><th>当前在线</th><th>最近连接</th><th>认证次数</th><th>最长在线时长</th><th></th></tr></thead><tbody id="connection-rows"></tbody></table></div><div class="pagination"><span id="record-count"></span><div><button id="latest" class="quiet">最新一页</button><button id="previous" class="quiet">上一页</button><span id="page-number"></span><button id="next" class="quiet">下一页</button><button id="oldest" class="quiet">最旧一页</button></div></div></section></section>

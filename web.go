@@ -26,6 +26,7 @@ import (
 var webFiles embed.FS
 
 type Web struct {
+	releases          *ReleaseChecker
 	clearMu           sync.Mutex
 	clearStatus       DatabaseClearStatus
 	clearCancel       context.CancelFunc
@@ -63,6 +64,7 @@ func NewWeb(c RuntimeConfig, s *Store, snapshot func() map[string]any, detail ..
 		w.liveDetail = detail[0]
 	}
 	w.cfg.AdminPassword = ""
+	w.releases = NewReleaseChecker(version)
 	minutes, err := s.WebIdleMinutes()
 	if err != nil {
 		return nil, err
@@ -89,6 +91,7 @@ func (w *Web) Start() error {
 	return nil
 }
 func (w *Web) Close() {
+	w.releases.Close()
 	w.clearMu.Lock()
 	w.clearClosing = true
 	if w.clearCancel != nil {
@@ -221,6 +224,8 @@ func (w *Web) Handler() http.Handler {
 		sendJSON(rw, 200, map[string]any{"username": w.cfg.AdminUsername, "retention_days": w.cfg.RetentionDays, "version": version, "idle_timeout_seconds": int(w.idleTimeout().Seconds())})
 	})
 	mux.HandleFunc("GET /api/emergency", w.protected(w.emergencyState))
+	mux.HandleFunc("GET /api/version", w.protected(w.releaseState))
+	mux.HandleFunc("POST /api/version/check", w.protected(w.releaseCheck))
 	mux.HandleFunc("POST /api/emergency", w.protected(w.emergencyAction))
 	mux.HandleFunc("GET /api/ipdb", w.protected(w.geoState))
 	mux.HandleFunc("POST /api/ipdb/update", w.protected(w.geoUpdate))

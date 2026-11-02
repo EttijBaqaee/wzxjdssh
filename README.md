@@ -4,9 +4,9 @@
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后先进行自适应随机等待，再收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
 
-当前版本：**2.0.6**
+当前版本：**2.1.0**
 
-镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.0.6`（Linux amd64），同时提供 `latest` 标签。
+镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.1.0`（Linux amd64），同时提供 `latest` 标签。
 
 ## 工作原理
 
@@ -51,12 +51,12 @@
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.6`，无需自行构建。
+1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.0`，无需自行构建。
 2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`；缺少镜像时会自动拉取。
 3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
-编排使用 `pull_policy: missing`，固定到 `2.0.6` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.0.6`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像，测试工具不会进入最终镜像。
+编排使用 `pull_policy: missing`，固定到 `2.1.0` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.1.0`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像，测试工具不会进入最终镜像。
 
 ### 常用编排参数
 
@@ -117,7 +117,7 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 
 同 IP 并发标记在最后一条连接断开后默认闲置 1 小时冷却，期间重连重新计时；历史连接标签保留。
 
-升级至 2.0.6 时，拉取新镜像并将编排标签改为 `2.0.6`，重建容器，保留数据卷。
+升级至 2.1.0 时，拉取新镜像并将编排标签改为 `2.1.0`，重建容器，保留数据卷。
 
 2.0.6 的无凭据探针按单条连接处理，默认提交期限为 20 秒；提前断开也只记录当前连接，不累计 IP 探针次数、不创建 IP 冷却。同 IP 已提交凭据的其他连接继续正常策略。升级前已存在的 IP 探针标签仅兼容至原到期时间，不续期。
 
@@ -241,9 +241,12 @@ Web 管理会话默认闲置 1 小时自动退出，可在“管理设置”修�
 
 核验仍采用每连接一个待回复请求；普通响应窗口扣除本机主动延迟，同时增加总等待上限：响应窗口 × 次数 + 2 × 最大单次主动延迟 + 写超时。持续诱发本机延迟也不能无限延长回收。首次请求和后续请求仍经过原有随机网络迟滞。配置参数与 2.0.5 兼容，更新镜像版本即可，保留数据卷。
 
+### 2.1.0 版本更新提示
+
+登录管理页面后自动检查 GitHub 最新正式版本，发现较新版本时，页头版本号右侧显示红底白字的椭圆 `new`，点击在新标签页打开 [GitHub 最新发布页](https://github.com/EttijBaqaee/wzxjdssh/releases/latest)。管理设置提供“检查更新”按钮和最近检查结果。
+
+由服务端向 GitHub 官方 API 查询，成功结果缓存 1 小时、失败后自动检查间隔 10 分钟，手动检查至少间隔 30 秒。每次最多一个请求，超时 8 秒，支持 ETag；检查失败保留上次有效结果并显示原因。只比较正式版本，草稿和预发布版不提示，自动检查不延长管理员闲置会话。无需新增编排参数，更新镜像并保留原数据卷即可。
+
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。第三方依赖遵循各自许可证，见 [第三方许可声明](THIRD-PARTY-NOTICES.txt)。
-
-
-

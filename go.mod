@@ -6,6 +6,7 @@ require (
 	github.com/maxmind/mmdbwriter v1.0.0
 	github.com/oschwald/maxminddb-golang v1.13.1
 	golang.org/x/crypto v0.58.0
+	golang.org/x/mod v0.42.0
 	modernc.org/sqlite v1.61.0
 )
 

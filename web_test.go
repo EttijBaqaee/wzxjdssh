@@ -110,10 +110,13 @@ func TestWebAuthenticationPrefixAndRecords(t *testing.T) {
 	if r := call("GET", "/sshpanel", "", nil, ""); r.Code != http.StatusPermanentRedirect || r.Header().Get("Location") != "/sshpanel/" {
 		t.Fatal("prefix redirect", r.Code, r.Header())
 	}
-	for _, path := range []string{"/sshpanel/", "/sshpanel/app.js", "/sshpanel/theme.js", "/sshpanel/style.css"} {
+	for _, path := range []string{"/sshpanel/", "/sshpanel/app.js", "/sshpanel/theme.js", "/sshpanel/geo.js", "/sshpanel/admin.js", "/sshpanel/releases.js", "/sshpanel/style.css"} {
 		r := call("GET", path, "", nil, "")
 		if r.Code != 200 || r.Header().Get("Content-Security-Policy") == "" || r.Header().Get("Cache-Control") != "no-store" {
 			t.Fatal(path, r.Code)
+		}
+		if strings.HasSuffix(path, ".js") && r.Header().Get("Content-Type") != "application/javascript; charset=utf-8" {
+			t.Fatal("script MIME type", path, r.Header())
 		}
 	}
 	body := `{"username":"admin","password":"test-admin-password"}`

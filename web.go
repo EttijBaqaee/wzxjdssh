@@ -252,7 +252,7 @@ func (w *Web) Handler() http.Handler {
 		rw.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		rw.Write(data)
 	})
-	for _, name := range []string{"geo.js", "admin.js"} {
+	for _, name := range []string{"geo.js", "admin.js", "releases.js"} {
 		mux.HandleFunc("GET /"+name, func(rw http.ResponseWriter, r *http.Request) {
 			data, _ := fs.ReadFile(files, name)
 			rw.Header().Set("Content-Type", "application/javascript; charset=utf-8")

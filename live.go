@@ -6,14 +6,17 @@ import (
 )
 
 type LiveConnection struct {
-	ConnectionID int64  `json:"connection_id"`
-	IP           string `json:"ip"`
-	Peer         string `json:"peer"`
-	Mode         string `json:"mode"`
-	StartedAt    int64  `json:"started_at"`
-	DurationMS   int64  `json:"duration_ms"`
-	DelayedMS    int64  `json:"delayed_ms"`
-	Delaying     bool   `json:"delaying"`
+	VerifiedPostAuthMS   int64  `json:"verified_post_auth_ms"`
+	UnverifiedPostAuthMS int64  `json:"unverified_post_auth_ms"`
+	Simulated            bool   `json:"simulated"`
+	ConnectionID         int64  `json:"connection_id"`
+	IP                   string `json:"ip"`
+	Peer                 string `json:"peer"`
+	Mode                 string `json:"mode"`
+	StartedAt            int64  `json:"started_at"`
+	DurationMS           int64  `json:"duration_ms"`
+	DelayedMS            int64  `json:"delayed_ms"`
+	Delaying             bool   `json:"delaying"`
 }
 
 type LiveIP struct {
@@ -23,14 +26,17 @@ type LiveIP struct {
 }
 
 type LiveStats struct {
-	ActiveIPs           int              `json:"active_ips"`
-	HeldIPs             int              `json:"held_ips"`
-	HeldConnections     int              `json:"held_connections"`
-	DelayingIPs         int              `json:"delaying_ips"`
-	DelayingConnections int              `json:"delaying_connections"`
-	LongestConnections  []LiveConnection `json:"longest_connections"`
-	IPConcurrency       []LiveIP         `json:"ip_concurrency"`
-	measured            []liveDelay
+	SimulatedVerifiedConnections   int              `json:"simulated_verified_connections"`
+	SimulatedUnverifiedConnections int              `json:"simulated_unverified_connections"`
+	SimulatedPendingChecks         int              `json:"simulated_pending_checks"`
+	ActiveIPs                      int              `json:"active_ips"`
+	HeldIPs                        int              `json:"held_ips"`
+	HeldConnections                int              `json:"held_connections"`
+	DelayingIPs                    int              `json:"delaying_ips"`
+	DelayingConnections            int              `json:"delaying_connections"`
+	LongestConnections             []LiveConnection `json:"longest_connections"`
+	IPConcurrency                  []LiveIP         `json:"ip_concurrency"`
+	measured                       []liveDelay
 }
 
 // Account for actual server waits, including the unfinished wait at snapshot time.
@@ -57,6 +63,25 @@ func (s *Server) liveSnapshotLocked(now time.Time) LiveStats {
 	ips := make(map[string]LiveIP)
 	heldIPs := make(map[string]bool)
 	for c := range s.clients {
+		verified, unverified := int64(0), int64(0)
+		if c.simulated.Load() {
+			if c.peer.verifiedAt.Load() > 0 {
+				live.SimulatedVerifiedConnections++
+			} else {
+				live.SimulatedUnverifiedConnections++
+			}
+			if c.peer.pending.Load() {
+				live.SimulatedPendingChecks++
+			}
+			// Session state has its own lock and may hold it while saving to DB;
+			// never acquire that lock while holding s.mu.
+			authenticated := c.simulatedAt.Load()
+			if authenticated > 0 {
+				post := max(int64(0), now.UnixMilli()-authenticated)
+				verified = max(int64(0), min(post, c.peer.verifiedAt.Load()-authenticated))
+				unverified = post - verified
+			}
+		}
 		elapsed := c.delayed
 		delaying := !c.delayStarted.IsZero()
 		if delaying {
@@ -75,9 +100,9 @@ func (s *Server) liveSnapshotLocked(now time.Time) LiveStats {
 		}
 		ips[c.ip] = ip
 		if c.recordID != 0 {
-			live.measured = append(live.measured, liveDelay{ID: c.recordID, DelayedMS: elapsed.Milliseconds(), DurationMS: now.Sub(c.started).Milliseconds()})
+			live.measured = append(live.measured, liveDelay{ID: c.recordID, DelayedMS: elapsed.Milliseconds(), DurationMS: now.Sub(c.started).Milliseconds(), VerifiedPostAuthMS: verified})
 		}
-		live.LongestConnections = append(live.LongestConnections, LiveConnection{ConnectionID: c.recordID, IP: c.ip, Peer: c.RemoteAddr().String(), Mode: c.cfg.Mode, StartedAt: c.started.UnixMilli(), DurationMS: now.Sub(c.started).Milliseconds(), DelayedMS: elapsed.Milliseconds(), Delaying: delaying})
+		live.LongestConnections = append(live.LongestConnections, LiveConnection{ConnectionID: c.recordID, IP: c.ip, Peer: c.RemoteAddr().String(), Mode: c.cfg.Mode, StartedAt: c.started.UnixMilli(), DurationMS: now.Sub(c.started).Milliseconds(), DelayedMS: elapsed.Milliseconds(), Delaying: delaying, Simulated: c.simulated.Load(), VerifiedPostAuthMS: verified, UnverifiedPostAuthMS: unverified})
 	}
 	live.ActiveIPs = len(ips)
 	live.HeldIPs = len(heldIPs)

@@ -71,6 +71,15 @@ func (c *clientConn) checkPeer(conn *ssh.ServerConn) bool {
 	go func() { _, _, err := conn.SendRequest("keepalive@openssh.com", true, nil); done <- err }()
 	timer := time.NewTimer(cfg.SSHKeepaliveTimeout)
 	defer timer.Stop()
+	// Local delays may postpone sending the request, but cannot exempt a silent
+	// client forever by continuously inducing other delayed writes.
+	_, maxPause := jitterBounds(cfg.Delay, cfg.DelayJitter)
+	_, _, _, networkMax := networkDelayBounds(cfg.Delay)
+	if networkMax > maxPause {
+		maxPause = networkMax
+	}
+	hardLimit := time.NewTimer(cfg.SSHKeepaliveTimeout*time.Duration(cfg.SSHKeepaliveCountMax) + 2*maxPause + cfg.WriteTimeout)
+	defer hardLimit.Stop()
 	stop := func() bool {
 		c.cancel()
 		c.Conn.Close()
@@ -87,9 +96,14 @@ func (c *clientConn) checkPeer(conn *ssh.ServerConn) bool {
 			}
 			c.peer.verifiedAt.Store(time.Now().UnixMilli())
 			c.peer.missed.Store(0)
+			c.checkpointPeerVerification()
 			c.learnVerifiedSession()
 			return true
 		case <-c.ctx.Done():
+			return stop()
+		case <-hardLimit.C:
+			c.peer.missed.Store(int64(cfg.SSHKeepaliveCountMax))
+			c.peerUnresponsive.Store(true)
 			return stop()
 		case <-timer.C:
 			// Include queued writes, but exclude our deliberately imposed waits.
@@ -113,7 +127,7 @@ func (c *clientConn) checkPeer(conn *ssh.ServerConn) bool {
 }
 
 func (c *clientConn) watchPeer(conn *ssh.ServerConn) {
-	timer := time.NewTimer(c.cfg.SSHKeepaliveInterval)
+	timer := time.NewTimer(0) // Verify even clients that never open a session.
 	defer timer.Stop()
 	for {
 		select {
@@ -172,6 +186,7 @@ func (s *Server) ConnectionDetail(id int64) (LiveRecordSnapshot, bool) {
 				trace.PostAuthMS = time.Since(state.started).Milliseconds()
 			}
 			trace.LastReceivedAt, trace.LastVerifiedAt = out.Liveness.LastReceivedAt, out.Liveness.LastVerifiedAt
+			updateVerifiedTime(&trace)
 			out.Session = &trace
 		}
 		state.mu.Unlock()

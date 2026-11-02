@@ -17,14 +17,17 @@ type SessionEvent struct {
 }
 
 type SessionTrace struct {
-	AuthenticatedAt int64          `json:"authenticated_at"`
-	EndedAt         int64          `json:"ended_at,omitempty"`
-	PostAuthMS      int64          `json:"post_auth_ms"`
-	LastReceivedAt  int64          `json:"last_received_at,omitempty"`
-	LastVerifiedAt  int64          `json:"last_verified_at,omitempty"`
-	LastStage       string         `json:"last_stage"`
-	EndError        string         `json:"end_error,omitempty"`
-	Events          []SessionEvent `json:"events"`
+	VerificationVersion  int            `json:"verification_version,omitempty"`
+	VerifiedPostAuthMS   int64          `json:"verified_post_auth_ms"`
+	UnverifiedPostAuthMS int64          `json:"unverified_post_auth_ms"`
+	AuthenticatedAt      int64          `json:"authenticated_at"`
+	EndedAt              int64          `json:"ended_at,omitempty"`
+	PostAuthMS           int64          `json:"post_auth_ms"`
+	LastReceivedAt       int64          `json:"last_received_at,omitempty"`
+	LastVerifiedAt       int64          `json:"last_verified_at,omitempty"`
+	LastStage            string         `json:"last_stage"`
+	EndError             string         `json:"end_error,omitempty"`
+	Events               []SessionEvent `json:"events"`
 }
 
 type sessionTraceState struct {
@@ -75,11 +78,14 @@ func (c *clientConn) sessionEvent(stage, kind string) {
 			return
 		}
 		state.started = now
+		c.simulatedAt.Store(now.UnixMilli())
+		state.trace.VerificationVersion = 1
 		state.trace.AuthenticatedAt = now.UnixMilli()
 	}
 	state.trace.LastReceivedAt, state.trace.LastVerifiedAt = c.lastReceivedAt.Load(), c.peer.verifiedAt.Load()
 	state.trace.LastStage = stage
 	state.trace.PostAuthMS = time.Since(state.started).Milliseconds()
+	updateVerifiedTime(&state.trace)
 	if len(state.trace.Events) >= 32 {
 		return // Preserve the final summary in memory; flush it when transport ends.
 	}
@@ -108,6 +114,7 @@ func (c *clientConn) finishSessionTrace(err error) {
 	state.trace.LastReceivedAt, state.trace.LastVerifiedAt = c.lastReceivedAt.Load(), c.peer.verifiedAt.Load()
 	state.trace.EndedAt = time.Now().UnixMilli()
 	state.trace.PostAuthMS = time.Since(state.started).Milliseconds()
+	updateVerifiedTime(&state.trace)
 	if err != nil {
 		message := strings.ToValidUTF8(err.Error(), "�")
 		runes := []rune(message)

@@ -392,12 +392,17 @@ func (w *Web) stats(rw http.ResponseWriter, r *http.Request) {
 		sendJSON(rw, 500, map[string]string{"error": "无法读取累计拖延时间"})
 		return
 	}
+	totalVerified, err := w.store.TotalVerifiedPostAuth(r.Context(), measured)
+	if err != nil {
+		sendJSON(rw, 500, map[string]string{"error": "无法读取已确认仿真在线时长"})
+		return
+	}
 	size, err := w.store.DatabaseBytes()
 	if err != nil {
 		sendJSON(rw, 500, map[string]string{"error": "无法读取数据库容量"})
 		return
 	}
-	sendJSON(rw, 200, map[string]any{"ip_geo": w.statsGeo(stats, live, delays), "ipdb": w.geo.Status(), "stored": stats, "runtime": live, "ip_delays": delays, "total_delayed_ms": totalDelay, "database": map[string]any{"bytes": size, "max_bytes": w.store.maxBytes.Load(), "capacity_deleted": w.store.capacityDeleted.Load()}, "retention_days": w.cfg.RetentionDays, "timezone": "UTC"})
+	sendJSON(rw, 200, map[string]any{"ip_geo": w.statsGeo(stats, live, delays), "ipdb": w.geo.Status(), "stored": stats, "runtime": live, "ip_delays": delays, "total_delayed_ms": totalDelay, "total_verified_post_auth_ms": totalVerified, "database": map[string]any{"bytes": size, "max_bytes": w.store.maxBytes.Load(), "capacity_deleted": w.store.capacityDeleted.Load()}, "retention_days": w.cfg.RetentionDays, "timezone": "UTC"})
 }
 
 func (w *Web) settings(rw http.ResponseWriter, r *http.Request) {

@@ -38,9 +38,10 @@ type IPDelay struct {
 }
 
 type liveDelay struct {
-	ID         int64 `json:"id"`
-	DelayedMS  int64 `json:"delayed_ms"`
-	DurationMS int64 `json:"duration_ms"`
+	VerifiedPostAuthMS int64 `json:"verified_post_auth_ms"`
+	ID                 int64 `json:"id"`
+	DelayedMS          int64 `json:"delayed_ms"`
+	DurationMS         int64 `json:"duration_ms"`
 }
 
 func recordWhere(f RecordFilter) (string, []any) {

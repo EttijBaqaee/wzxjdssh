@@ -96,6 +96,13 @@ func TestWriteBrowserIPFixture(t *testing.T) {
 		return
 	}
 	now := time.Now().Add(-time.Hour)
+	verifiedID := mustStart(t, s, "192.0.2.200", now)
+	if err = s.finish(verifiedID, 20*time.Second, "simulated_closed", "ssh_keepalive_timeout", 100, 100, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.saveSessionTrace(verifiedID, SessionTrace{VerificationVersion: 1, AuthenticatedAt: now.Add(5 * time.Second).UnixMilli(), EndedAt: now.Add(20 * time.Second).UnixMilli(), PostAuthMS: 15000, LastVerifiedAt: now.Add(10 * time.Second).UnixMilli(), VerifiedPostAuthMS: 5000, UnverifiedPostAuthMS: 10000, LastStage: "authenticated", EndError: "ssh_keepalive_timeout"}); err != nil {
+		t.Fatal(err)
+	}
 	for _, ip := range []string{"8.8.8.8", "223.5.5.5", "2606:4700:4700::1111"} {
 		id := mustStart(t, s, ip, now)
 		if err = s.finish(id, 43*time.Minute+54*time.Second, "closed", "peer_closed", 10, 20, time.Minute); err != nil {

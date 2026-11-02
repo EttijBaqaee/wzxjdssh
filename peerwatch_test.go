@@ -14,7 +14,7 @@ import (
 
 // Unlike ssh.NewClient, this client deliberately does not answer incoming SSH
 // requests. Its TCP socket and SSH packet reader remain open and healthy.
-func silentSSHPeer(t *testing.T, cfg Config) (*Server, *Store, ssh.Conn, *net.TCPConn) {
+func silentSSHPeer(t *testing.T, cfg Config, responders ...func(<-chan *ssh.Request)) (*Server, *Store, ssh.Conn, *net.TCPConn) {
 	t.Helper()
 	store := testStore(t)
 	const ident = "SSH-2.0-silent-peer-test"
@@ -36,11 +36,14 @@ func silentSSHPeer(t *testing.T, cfg Config) (*Server, *Store, ssh.Conn, *net.TC
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { raw.Close() })
-	conn, _, _, err := ssh.NewClientConn(raw, address(cfg), &ssh.ClientConfig{User: "silent-user", ClientVersion: ident, Auth: []ssh.AuthMethod{ssh.Password("synthetic-password")}, HostKeyCallback: ssh.InsecureIgnoreHostKey()})
+	conn, _, requests, err := ssh.NewClientConn(raw, address(cfg), &ssh.ClientConfig{User: "silent-user", ClientVersion: ident, Auth: []ssh.AuthMethod{ssh.Password("synthetic-password")}, HostKeyCallback: ssh.InsecureIgnoreHostKey()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
+	if len(responders) > 0 {
+		go responders[0](requests)
+	}
 	return s, store, conn, raw.(*net.TCPConn)
 }
 

@@ -429,6 +429,7 @@ type clientConn struct {
 	peerDuringDelay     atomic.Bool
 	interruptedAuthWait atomic.Int64
 	simulated           atomic.Bool
+	simulatedAt         atomic.Int64
 	clientVersion       string
 	markedUntil         int64
 	authDelayTried      atomic.Bool

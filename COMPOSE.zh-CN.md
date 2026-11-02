@@ -1,10 +1,10 @@
-# wzxjdssh 2.0.5： 编排使用文档
+# wzxjdssh 2.0.6： 编排使用文档
 
-配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.5`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
+配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.6`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
 
 创建编排、粘贴配套 YAML，首次部署会从 GHCR 拉取镜像。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
 
-离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.0.5`、`pull_policy` 改为 `never`。
+离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.0.6`、`pull_policy` 改为 `never`。
 
 ## 端口映射
 
@@ -118,7 +118,7 @@ WZXJDSSH_DATABASE_MAX_MB: "${WZXJDSSH_DATABASE_MAX_MB:-0}"
 
 ### 无凭据探针
 
-2.0.5 按单条连接判断，默认接入后 20 秒未提交带用户名的密码、公钥或交互回答就释放当前连接，不发送 SSH 拒绝或断开内容。提前断开也仅记录当前连接，不累计 IP 探针次数、不创建 IP 冷却，同 IP 的其他连接不受此规则影响。`none`、仅握手或仅发起交互挑战不算提交；必要握手与认证方法协商仍需响应，关闭 socket 时内核可能发送 FIN/RST。通过 `WZXJDSSH_CREDENTIAL_TIMEOUT_MS` 调整期限。升级前已有的 IP 探针标签兼容至原到期时间，不续期。
+2.0.6 按单条连接判断，默认接入后 20 秒未提交带用户名的密码、公钥或交互回答就释放当前连接，不发送 SSH 拒绝或断开内容。提前断开也仅记录当前连接，不累计 IP 探针次数、不创建 IP 冷却，同 IP 的其他连接不受此规则影响。`none`、仅握手或仅发起交互挑战不算提交；必要握手与认证方法协商仍需响应，关闭 socket 时内核可能发送 FIN/RST。通过 `WZXJDSSH_CREDENTIAL_TIMEOUT_MS` 调整期限。升级前已有的 IP 探针标签兼容至原到期时间，不续期。
 
 ### 反代到 80 / 443
 
@@ -180,7 +180,7 @@ environment:
 
 | 字段 | 当前值 | 用途 |
 | --- | --- | --- |
-| image | ghcr.io/ettijbaqaee/wzxjdssh:2.0.5 | 固定 GHCR 镜像版本 |
+| image | ghcr.io/ettijbaqaee/wzxjdssh:2.0.6 | 固定 GHCR 镜像版本 |
 | pull_policy | missing | 本地没有镜像时从 GHCR 拉取 |
 | container_name | wzxjdssh | 固定容器名；同一宿主机部署多份时需分别命名或移除此字段 |
 | restart | unless-stopped | 自动恢复容器；手动停止后保持停止 |
@@ -212,7 +212,7 @@ environment:
 
 若改用宿主机目录挂载 `/data`，该目录需允许容器 UID/GID `65532:65532` 读写。命名卷由 Docker 使用镜像内目录的属主和权限初始化。
 
-升级 2.0.5：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
+升级 2.0.6：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
 
 ## 自定义配置
 
@@ -274,7 +274,7 @@ volumes:
 首页统计口径：拖延中 IP / 连接统计仍在线且已实际进入拖延流程的来源，等待客户端下一步时仍计入；旁边另列此刻处于延迟响应计时中的数量。握手未完成及探针静默不充作已拖延。认证拒绝按已返回 rejected 的认证尝试计数；接入拦截合计限流等接入拒绝与探针静默，并列出两者。累计实际拖延合计当前保留记录和全部在线连接的实测等待，包含未结束等待，按连接编号去重；并发分别累加，不等于墙上时间，不取 TOP 10 近似值。正常重启保留已结束记录，清理旧记录后其时长也随之移除；旧版未采集及异常中断丢失的等待不推算。
 
 
-仿真连接使用 SSH 应用层存活检查：默认每 60 秒发送一次 `keepalive@openssh.com`，有效的成功或失败回复均证明客户端 SSH 仍响应；TCP ACK 不算。一个待回复请求连续经过 3 个 30 秒响应窗口仍无回复时，关闭并释放连接，记录 `ssh_keepalive_timeout`。服务端主动制造的延迟不计入无响应窗口；每连接最多一个待确认请求，不随超时无限增加协程。会话达到时间门槛后还须确认 SSH 响应，才计入成功学习。FIN/RST 正常断线仍即时回收，持续响应的慢连接没有固定寿命上限。
+仿真连接使用 SSH 应用层存活检查：仿真认证成功后立即开始首次核验，此后默认每 60 秒发送一次 `keepalive@openssh.com`，有效的成功或失败回复均证明客户端 SSH 仍响应；TCP ACK 不算。一个待回复请求连续经过 3 个 30 秒响应窗口仍无回复时，关闭并释放连接，记录 `ssh_keepalive_timeout`。服务端主动制造的延迟不计入无响应窗口；每连接最多一个待确认请求，不随超时无限增加协程。会话达到时间门槛后还须确认 SSH 响应，才计入成功学习。FIN/RST 正常断线仍即时回收，持续响应的慢连接没有固定寿命上限。
 
 可在编排配置 `WZXJDSSH_SSH_KEEPALIVE_INTERVAL_MS`（默认 `60000`）、`WZXJDSSH_SSH_KEEPALIVE_TIMEOUT_MS`（默认 `30000`）、`WZXJDSSH_SSH_KEEPALIVE_COUNT_MAX`（默认 `3`）。前两项范围 1–3600000 毫秒，最后一项 1–10。在线详情读取实时收发字节、最近收包和 SSH 响应时间；认证后经过时间包含双方等待，不能当作已证实客户端忙碌或实际拖延。
 
@@ -304,4 +304,10 @@ volumes:
 
 默认下载源为 [PBH-BTN/GeoLite.mmdb](https://github.com/PBH-BTN/GeoLite.mmdb/releases)，数据来自 MaxMind GeoLite2 与 ljxi/GeoCN。首次下载未完成时明确显示“归属数据库尚未就绪”，不阻塞 SSH；可离线将三库分别以 `GeoLite2-City.mmdb`、`GeoLite2-ASN.mmdb`、`GeoCN.mmdb` 放入 `ipdb/` 并关闭自动更新。
 
-已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.5` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。
+已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.0.6` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。
+
+### 2.0.6 仿真响应核验
+
+连接详情和实时榜单分别显示仿真已确认在线时长及待核验尾段。只有收到服务端心跳对应的有效 SSH 成功或失败回复，已确认时长才前进；TCP ACK、单纯收包和服务端计时不算。累计指标按连接去重，涵盖在线及保留历史；升级前的记录不补算。此指标证明 SSH 客户端仍在响应，不代表扫描器停止其他任务。原有连接持续时间和累计主动等待保持原口径。
+
+核验仍采用每连接一个待回复请求；普通响应窗口扣除本机主动延迟，同时增加总等待上限：响应窗口 × 次数 + 2 × 最大单次主动延迟 + 写超时。持续诱发本机延迟也不能无限延长回收。首次请求和后续请求仍经过原有随机网络迟滞。配置参数与 2.0.5 兼容，更新镜像版本即可，保留数据卷。

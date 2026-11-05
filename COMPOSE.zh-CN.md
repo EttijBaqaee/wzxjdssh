@@ -1,10 +1,10 @@
-# wzxjdssh 2.1.0： 编排使用文档
+# wzxjdssh 2.1.1： 编排使用文档
 
-配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.0`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
+配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.1`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
 
 创建编排、粘贴配套 YAML，首次部署会从 GHCR 拉取镜像。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
 
-离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.1.0`、`pull_policy` 改为 `never`。
+离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.1.1`、`pull_policy` 改为 `never`。
 
 ## 端口映射
 
@@ -180,7 +180,7 @@ environment:
 
 | 字段 | 当前值 | 用途 |
 | --- | --- | --- |
-| image | ghcr.io/ettijbaqaee/wzxjdssh:2.1.0 | 固定 GHCR 镜像版本 |
+| image | ghcr.io/ettijbaqaee/wzxjdssh:2.1.1 | 固定 GHCR 镜像版本 |
 | pull_policy | missing | 本地没有镜像时从 GHCR 拉取 |
 | container_name | wzxjdssh | 固定容器名；同一宿主机部署多份时需分别命名或移除此字段 |
 | restart | unless-stopped | 自动恢复容器；手动停止后保持停止 |
@@ -196,7 +196,7 @@ environment:
 
 镜像内用户为 UID/GID `65532:65532`，健康检查调用内置 `/wzxjdssh -health`。正式镜像基于 scratch，没有 shell、包管理器或编译器，使用面板的容器日志查看运行情况。
 
-`MaxClients` 默认是 4096，属于接入限制，并非这套资源配额已验证的容量。需要结合实际握手速率、内存和 CPU 调整。
+`MaxClients` 默认是 4096，属于接入限制；实际容量取决于握手速率、内存和 CPU，需要结合部署资源调整。
 
 ## 密钥卷与升级
 
@@ -212,7 +212,7 @@ environment:
 
 若改用宿主机目录挂载 `/data`，该目录需允许容器 UID/GID `65532:65532` 读写。命名卷由 Docker 使用镜像内目录的属主和权限初始化。
 
-升级 2.1.0：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
+升级 2.1.1：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
 
 ## 自定义配置
 
@@ -304,7 +304,7 @@ volumes:
 
 默认下载源为 [PBH-BTN/GeoLite.mmdb](https://github.com/PBH-BTN/GeoLite.mmdb/releases)，数据来自 MaxMind GeoLite2 与 ljxi/GeoCN。首次下载未完成时明确显示“归属数据库尚未就绪”，不阻塞 SSH；可离线将三库分别以 `GeoLite2-City.mmdb`、`GeoLite2-ASN.mmdb`、`GeoCN.mmdb` 放入 `ipdb/` 并关闭自动更新。
 
-已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.0` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。
+已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.1` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。
 
 ### 2.0.6 仿真响应核验
 
@@ -318,3 +318,7 @@ volumes:
 登录管理页面后自动检查 GitHub 最新正式版本，发现较新版本时，页头版本号右侧显示红底白字的椭圆 `new`，点击在新标签页打开 [GitHub 最新发布页](https://github.com/EttijBaqaee/wzxjdssh/releases/latest)。管理设置提供“检查更新”按钮和最近检查结果。
 
 由服务端向 GitHub 官方 API 查询，成功结果缓存 1 小时、失败后自动检查间隔 10 分钟，手动检查至少间隔 30 秒。每次最多一个请求，超时 8 秒，支持 ETag；检查失败保留上次有效结果并显示原因。只比较正式版本，草稿和预发布版不提示，自动检查不延长管理员闲置会话。无需新增编排参数，更新镜像并保留原数据卷即可。
+
+## 2.1.1 后台语言与主题
+
+首次跟随浏览器首选语言，支持中文和英文，登录页及后台均可通过 English / 中文 按钮切换并记住选择。明暗主题切换采用柔和颜色过渡，尊重减少动态效果偏好。无需新增编排参数，更新镜像版本并保留现有挂载即可。英文项目介绍见 [README.en.md](README.en.md)。

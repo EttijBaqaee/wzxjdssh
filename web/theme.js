@@ -8,8 +8,8 @@
     const dark = (chosen || (browserTheme.matches ? 'dark' : 'light')) === 'dark';
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
     document.querySelectorAll('[data-theme-toggle]').forEach(button => {
-      button.textContent = dark ? '☀ 明亮模式' : '☾ 暗黑模式';
-      button.setAttribute('aria-label', dark ? '切换到明亮模式' : '切换到暗黑模式');
+      button.textContent = dark ? t('☀ 明亮模式') : t('☾ 暗黑模式');
+      button.setAttribute('aria-label', dark ? t('切换到明亮模式') : t('切换到暗黑模式'));
       button.setAttribute('aria-pressed', String(dark));
     });
   }
@@ -25,5 +25,6 @@
       apply();
     }));
     apply();
+    requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.add('theme-ready')));
   });
 })();

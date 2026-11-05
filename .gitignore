@@ -29,3 +29,9 @@ Thumbs.db
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+
+*_test.go
+*validation*
+*verification*
+VALIDATION.md
+coverage*

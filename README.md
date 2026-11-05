@@ -1,12 +1,22 @@
 # wzxjdssh
 
+[![中文](https://img.shields.io/badge/Language-中文-087f79)](README.md) [![English](https://img.shields.io/badge/Language-English-087f79)](README.en.md)
+
+**wzxjdssh** 是“**我这系假的SSH**”的拼音首字缩写：**wo zhe xi jia de SSH**，末尾保留协议缩写 SSH。
+
 以 Docker 部署的 SSH 诱捕服务，支持真实 SSHv2 握手、延迟拒绝认证，以及可选的慢速横幅模式。
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后先进行自适应随机等待，再收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
 
-当前版本：**2.1.0**
+当前版本：**2.1.1**
 
-镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.1.0`（Linux amd64），同时提供 `latest` 标签。
+镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.1.1`（Linux amd64），同时提供 `latest` 标签。
+
+## 后台语言与主题
+
+登录页和后台支持中文、英文。首次根据浏览器首选语言自动选择：中文语言使用中文，其余使用英文；点击 **English / 中文** 可手动切换并记住偏好。切换语言会刷新页面，已登录会话继续保留。
+
+导航、统计、连接详情、管理设置、警告、版本提示、日期和数字随语言显示；用户名、密码、公钥和客户端标识等原始记录不翻译，地名及协议标识保留数据源原值。明暗模式默认跟随浏览器，手动切换采用柔和颜色渐变，不移动布局；开启“减少动态效果”时即时切换。
 
 ## 工作原理
 
@@ -36,7 +46,7 @@
 - 严格配置校验；配置重载失败保留旧监听和旧配置。
 - 内置 SQLite，记录连接状态、来源、时间、时长、客户端标识和认证尝试，默认保留 90 天。
 - 记录用户名、密码、keyboard-interactive 回答，以及客户端提交的公钥正文和 SHA256 指纹；SSH 不传输客户端私钥，公钥探测也不证明持有对应私钥。
-- 内置中文 Web UI：统计概览、最近 30 天趋势、来源/用户名/认证方式排行、连接筛选和详情。
+- 内置中英文 Web UI：统计概览、最近 30 天趋势、来源/用户名/认证方式排行、连接筛选和详情。
 - 密码 TOP 10、单 IP 最长连接持续时间 TOP 10；最长连接持续时间与累计实际拖延分别显示。
 - 连接记录按 IP 汇总，展开后保留每次连接、来源端口与认证详情；主表和展开表均支持最新一页、最旧一页。
 - 可选数据库容量上限；超过后按最旧连接清理认证记录并回收 SQLite 文件空间，留空或 0 时不启用容量清理。
@@ -51,12 +61,12 @@
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.0`，无需自行构建。
+1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.1`，无需自行构建。
 2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`；缺少镜像时会自动拉取。
 3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
-编排使用 `pull_policy: missing`，固定到 `2.1.0` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.1.0`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像，测试工具不会进入最终镜像。
+编排使用 `pull_policy: missing`，固定到 `2.1.1` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.1.1`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像。
 
 ### 常用编排参数
 
@@ -117,7 +127,7 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 
 同 IP 并发标记在最后一条连接断开后默认闲置 1 小时冷却，期间重连重新计时；历史连接标签保留。
 
-升级至 2.1.0 时，拉取新镜像并将编排标签改为 `2.1.0`，重建容器，保留数据卷。
+升级至 2.1.1 时，拉取新镜像并将编排标签改为 `2.1.1`，重建容器，保留数据卷。
 
 2.0.6 的无凭据探针按单条连接处理，默认提交期限为 20 秒；提前断开也只记录当前连接，不累计 IP 探针次数、不创建 IP 冷却。同 IP 已提交凭据的其他连接继续正常策略。升级前已存在的 IP 探针标签仅兼容至原到期时间，不续期。
 

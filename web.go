@@ -26,29 +26,32 @@ import (
 var webFiles embed.FS
 
 type Web struct {
-	releases          *ReleaseChecker
-	clearMu           sync.Mutex
-	clearStatus       DatabaseClearStatus
-	clearCancel       context.CancelFunc
-	clearWG           sync.WaitGroup
-	clearClosing      bool
-	clearFailures     int
-	clearFailureUntil time.Time
-	geo               *GeoDB
-	cfg               RuntimeConfig
-	store             *Store
-	snapshot          func() map[string]any
-	emergency         *Server
-	liveDetail        func(int64) (LiveRecordSnapshot, bool)
-	secret            [32]byte
-	password          [32]byte
-	server            *http.Server
-	errors            chan error
-	mu                sync.Mutex
-	failures          map[string]loginFailures
-	sessions          map[[32]byte]time.Time
-	idleNanos         atomic.Int64
-	settingsMu        sync.Mutex
+	bannerMu           sync.Mutex
+	bannerFailures     int
+	bannerFailureUntil time.Time
+	releases           *ReleaseChecker
+	clearMu            sync.Mutex
+	clearStatus        DatabaseClearStatus
+	clearCancel        context.CancelFunc
+	clearWG            sync.WaitGroup
+	clearClosing       bool
+	clearFailures      int
+	clearFailureUntil  time.Time
+	geo                *GeoDB
+	cfg                RuntimeConfig
+	store              *Store
+	snapshot           func() map[string]any
+	emergency          *Server
+	liveDetail         func(int64) (LiveRecordSnapshot, bool)
+	secret             [32]byte
+	password           [32]byte
+	server             *http.Server
+	errors             chan error
+	mu                 sync.Mutex
+	failures           map[string]loginFailures
+	sessions           map[[32]byte]time.Time
+	idleNanos          atomic.Int64
+	settingsMu         sync.Mutex
 }
 type loginFailures struct {
 	Count int
@@ -175,7 +178,7 @@ func (w *Web) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(rw http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		defer cancel()
-		if w.store.db.PingContext(ctx) != nil {
+		if w.store.Health(ctx) != nil {
 			sendJSON(rw, 503, map[string]bool{"ok": false})
 			return
 		}
@@ -231,6 +234,8 @@ func (w *Web) Handler() http.Handler {
 	mux.HandleFunc("POST /api/ipdb/update", w.protected(w.geoUpdate))
 	mux.HandleFunc("GET /api/database/clear", w.protected(w.databaseClearState))
 	mux.HandleFunc("POST /api/database/clear", w.protected(w.databaseClearAction))
+	mux.HandleFunc("GET /api/banner", w.protected(w.bannerState))
+	mux.HandleFunc("POST /api/banner", w.protected(w.bannerAction))
 	mux.HandleFunc("GET /api/settings", w.protected(w.settings))
 	mux.HandleFunc("POST /api/settings", w.protected(w.settings))
 	mux.HandleFunc("GET /api/stats", w.protected(w.stats))

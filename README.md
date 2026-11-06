@@ -8,11 +8,13 @@
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后先进行自适应随机等待，再收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
 
-当前已发布版本：**2.1.2**
+当前版本：**2.2.0**
 
-镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.1.2`（Linux amd64），同时提供 `latest` 标签。
+镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.2.0`（Linux amd64），同时提供 `latest` 标签。
 
 默认 SSH 标识为 `SSH-2.0-OpenSSH_10.6p1`，对应 [OpenSSH 10.6p2 安全修复](https://www.openssh.com/txt/release-10.6p2)前的版本，不带 Debian 后缀；仅改变对外标识，底层仍使用 Go SSH 实现。非空 `WZXJDSSH_SERVER_VERSION` 可覆盖默认标识。
+
+管理设置在“清理数据库”上方显示当前 SSH 横幅，支持输入管理员密码后即时修改。输入框固定 `SSH-2.0-` 前缀，只填写后面的版本和备注；完整标识最多 253 字节，仅允许可打印 ASCII。修改立即用于新 SSH 连接，已建立连接不受影响。网页修改只在当前进程生效，不写入 SQLite 或修改编排；重启或重新加载配置后，仍按现有编排和配置文件的优先级读取。
 
 ## 后台语言与主题
 
@@ -63,12 +65,12 @@
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.2`，无需自行构建。
+1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.2.0`，无需自行构建。
 2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`；缺少镜像时会自动拉取。
 3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
-编排使用 `pull_policy: missing`，固定到 `2.1.2` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.1.2`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像。
+编排使用 `pull_policy: missing`，固定到 `2.2.0` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.2.0`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像。
 
 ### 常用编排参数
 
@@ -129,7 +131,7 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 
 同 IP 并发标记在最后一条连接断开后默认闲置 1 小时冷却，期间重连重新计时；历史连接标签保留。
 
-升级至 2.1.2 时，拉取新镜像并将编排标签改为 `2.1.2`，重建容器，保留数据卷。
+升级至 2.2.0 时，拉取新镜像并将编排标签改为 `2.2.0`，重建容器，保留数据卷。
 
 2.0.6 的无凭据探针按单条连接处理，默认提交期限为 20 秒；提前断开也只记录当前连接，不累计 IP 探针次数、不创建 IP 冷却。同 IP 已提交凭据的其他连接继续正常策略。升级前已存在的 IP 探针标签仅兼容至原到期时间，不续期。
 
@@ -172,6 +174,8 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 `hostkeys:/data` 保存主机密钥，`records:/var/lib/wzxjdssh` 保存 SQLite 数据库及其 WAL 文件。升级时编辑原编排、保留同一个项目名和两个数据卷；新建编排通常会生成另一组卷。自定义目录挂载需允许 UID/GID `65532:65532` 读写。
 
 数据库保存对方实际提交的认证内容，请限制管理入口和备份的访问权限。只部署一个实例读写同一数据库目录。备份时先停止编排服务，再备份整个 `records` 卷；运行中备份应使用 SQLite Backup API，不能只复制主数据库而遗漏 WAL。
+
+2.2.0 启动时校验已有数据库的结构和完整性；记录初始化状态的 `records.sqlite.initialized` 与数据库一起保存在 records 卷中。已有库丢失、截断或损坏时拒绝启动；运行中检测到文件丢失、替换、明显损坏或 SQLite 永久读写错误时停止 SSH 和 Web，并以非零状态退出，保留现有文件，不自动生成空库。恢复前先停止编排，保存故障目录，再恢复完整备份；首次空目录仍正常初始化。如果整个数据目录连同初始化标记一起丢失，程序无法区分首次部署。
 
 程序启动及每小时清理过期记录。认证按提交时间过期，已结束连接按开始时间过期；仍在线的连接在结束后清理。删除记录会供 SQLite 重用空间，不保证立即缩小文件或擦除外部快照。Web 总览覆盖当前保留数据，趋势显示最近 30 天，日统计按 UTC，详情时间按浏览器本地时区展示。
 

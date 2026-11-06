@@ -26,9 +26,7 @@ coverage.out
 .vscode/
 .DS_Store
 Thumbs.db
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
+*.sqlite*
 
 *_test.go
 *validation*

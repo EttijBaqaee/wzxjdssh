@@ -41,18 +41,14 @@ func (s *Store) saveSessionTrace(id int64, trace SessionTrace) error {
 	if err != nil {
 		return err
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	_, err = s.db.Exec(`INSERT INTO simulated_sessions(connection_id,trace) VALUES(?,?) ON CONFLICT(connection_id) DO UPDATE SET trace=excluded.trace`, id, string(data))
-	if err != nil {
+	return s.write(func(tx *sql.Tx) error {
+		_, err := s.exec(tx, `INSERT INTO simulated_sessions(connection_id,trace) VALUES(?,?) ON CONFLICT(connection_id) DO UPDATE SET trace=excluded.trace`, id, string(data))
 		return err
-	}
-	return s.enforceBudgetLocked()
+	})
 }
-
 func (s *Store) loadSessionTrace(ctx context.Context, id int64) (*SessionTrace, error) {
 	var data string
-	err := s.db.QueryRowContext(ctx, `SELECT trace FROM simulated_sessions WHERE connection_id=?`, id).Scan(&data)
+	err := s.reader.QueryRowContext(ctx, `SELECT trace FROM simulated_sessions WHERE connection_id=?`, id).Scan(&data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

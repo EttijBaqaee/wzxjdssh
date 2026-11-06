@@ -173,7 +173,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "runtime configuration:", err)
 		return 2
 	}
-	store, err := OpenStore(opts.DatabasePath, c.ParallelCooldown)
+	store, err := openStore(opts.DatabasePath, opts.DatabaseMaxMB*1024*1024, c.ParallelCooldown)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "database startup failed")
 		return 1
@@ -231,6 +231,9 @@ func run() int {
 		case sig = <-signals:
 		case <-webErrors:
 			fmt.Fprintln(os.Stderr, "web server stopped unexpectedly")
+			return 1
+		case <-store.fatalErrors:
+			fmt.Fprintln(os.Stderr, "persistent database is unavailable; stopping service and preserving existing files")
 			return 1
 		}
 		switch sig {

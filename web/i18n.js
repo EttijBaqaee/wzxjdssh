@@ -439,6 +439,21 @@
  "每 {days} 天更新过期库": "Update stale databases every {days} days",
  "已清空 {count} 条连接及关联认证、标签记录。": "Erased {count} connections and their authentication attempts and marks."
 });
+ Object.assign(english,{
+  "SSH 横幅": "SSH banner",
+  "正在使用的横幅": "Active banner",
+  "自定义横幅": "Custom banner",
+  "SSH-2.0- 后的版本与备注": "Version and comment after SSH-2.0-",
+  "仅对新 SSH 连接生效，无需重启；重启或重新加载配置后恢复编排或配置文件中的标识。": "Applies immediately to new SSH connections. Restarting or reloading configuration restores the Compose or configuration-file identification.",
+  "确认修改横幅": "Confirm banner change",
+  "横幅已修改，新 SSH 连接立即生效。": "Banner updated. New SSH connections use it immediately.",
+  "当前服务未提供横幅控制": "Banner management is unavailable for this service.",
+  "需要管理员密码和完整 SSH 横幅": "An administrator password and a complete SSH banner are required.",
+  "管理员密码不正确，横幅未修改": "Incorrect administrator password. The banner was not changed.",
+  "横幅必须以 SSH-2.0- 开头，软件名称不能为空，总长不超过 253 字节，仅允许可打印 ASCII 字符": "The banner must start with SSH-2.0-, include a software name, contain only printable ASCII, and be at most 253 bytes.",
+  "服务正在关闭，横幅未修改": "The service is shutting down. The banner was not changed."
+});
+ Object.assign(english,{"修改横幅": "Change banner", "确认修改 SSH 横幅": "Confirm SSH banner change", "将使用的横幅": "New banner", "修改后仅对新 SSH 连接生效，现有连接保持不变。": "Only new SSH connections use the changed banner. Existing connections remain unchanged."});
  function t(value,params){
   if(typeof value!=='string')return value;
   const translated=language==='en'?english[value.trim()]:undefined;

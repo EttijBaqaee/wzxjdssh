@@ -17,11 +17,25 @@ import (
 )
 
 type Store struct {
-	db              *sql.DB
-	path            string
-	writeMu         sync.Mutex
-	maxBytes        atomic.Int64
-	capacityDeleted atomic.Uint64
+	fileInfo          os.FileInfo
+	fault             atomic.Pointer[storageFault]
+	fatalErrors       chan error
+	db                *sql.DB
+	statements        map[string]*sql.Stmt
+	reader            *sql.DB
+	writes            chan *storeWrite
+	urgentWrites      chan *storeWrite
+	writerMu          sync.RWMutex
+	writerClosing     bool
+	writerDone        chan struct{}
+	budgetErrors      chan error
+	budgetPruning     bool
+	budgetCheckedAt   time.Time
+	budgetReclaimedAt time.Time
+	path              string
+	writeMu           sync.Mutex
+	maxBytes          atomic.Int64
+	capacityDeleted   atomic.Uint64
 }
 type ConnectionRecord struct {
 	Geo           IPAttribution `json:"geo"`
@@ -96,8 +110,14 @@ type StoredStats struct {
 }
 
 func OpenStore(path string, parallelCooldown ...time.Duration) (*Store, error) {
+	return openStore(path, 0, parallelCooldown...)
+}
+func openStore(path string, migrationBudget int64, parallelCooldown ...time.Duration) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("database path cannot be empty")
+	}
+	if err := checkDatabaseInitialization(path); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
@@ -111,7 +131,7 @@ func OpenStore(path string, parallelCooldown ...time.Duration) (*Store, error) {
 	if err = os.Chmod(path, 0600); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqliteDSN(path, false))
 	if err != nil {
 		return nil, err
 	}
@@ -123,18 +143,22 @@ func OpenStore(path string, parallelCooldown ...time.Duration) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	if schemaVersion > 3 {
+	if schemaVersion > 4 {
 		db.Close()
 		return nil, errors.New("database schema is newer than this application")
 	}
+	if err = verifyExistingDatabase(db, schemaVersion); err != nil {
+		db.Close()
+		return nil, err
+	}
 	schema := `PRAGMA busy_timeout=5000;
  PRAGMA foreign_keys=ON;
+ PRAGMA auto_vacuum=INCREMENTAL;
  PRAGMA journal_mode=WAL;
  PRAGMA wal_autocheckpoint=128;
  PRAGMA journal_size_limit=0;
  PRAGMA synchronous=FULL;
  PRAGMA secure_delete=ON;
- PRAGMA auto_vacuum=INCREMENTAL;
  CREATE TABLE IF NOT EXISTS connections (
  id INTEGER PRIMARY KEY, peer TEXT NOT NULL, ip TEXT NOT NULL, mode TEXT NOT NULL,
  started_at INTEGER NOT NULL, ended_at INTEGER, duration_ms INTEGER NOT NULL DEFAULT 0, delayed_ms INTEGER NOT NULL DEFAULT 0,
@@ -198,10 +222,6 @@ func OpenStore(path string, parallelCooldown ...time.Duration) (*Store, error) {
 			}
 		}
 	}
-	if _, err = db.Exec(`PRAGMA user_version=3`); err != nil {
-		db.Close()
-		return nil, err
-	}
 	// A previous process cannot still own these connections after an ordinary restart.
 	now := time.Now().UnixMilli()
 	cooldown := time.Hour
@@ -221,12 +241,67 @@ func OpenStore(path string, parallelCooldown ...time.Duration) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if schemaVersion < 4 && migrationBudget > 0 {
+		// Old records are already subject to the configured capacity policy. Prune
+		// before adding summary/index overhead, without firing millions of summary
+		// updates only to delete those records again during the same startup.
+		if err = s.pruneLegacyMigration(migrationBudget * 4 / 5); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("database migration pruning: %w", err)
+		}
+		if err = s.SetDatabaseBudget(migrationBudget * 4 / 5); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("database migration space: %w", err)
+		}
+		if err = s.SetDatabaseBudget(0); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	if err = s.initAnalytics(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = s.prepareWrites(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = s.checkpoint(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	reader, err := sql.Open("sqlite", sqliteDSN(path, true))
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	reader.SetMaxOpenConns(2)
+	reader.SetMaxIdleConns(2)
+	if err = reader.Ping(); err != nil {
+		reader.Close()
+		db.Close()
+		return nil, err
+	}
+	s.reader = reader
+	s.fileInfo, err = os.Stat(path)
+	if err != nil {
+		reader.Close()
+		db.Close()
+		return nil, err
+	}
+	if err = markDatabaseInitialized(path); err != nil {
+		reader.Close()
+		db.Close()
+		return nil, err
+	}
+	s.fatalErrors = make(chan error, 1)
+	s.startWriter()
 	return s, nil
 }
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error { return s.closeStore() }
 func (s *Store) WebIdleMinutes() (int, error) {
 	var minutes int
-	err := s.db.QueryRow(`SELECT value FROM web_preferences WHERE key='idle_minutes'`).Scan(&minutes)
+	err := s.reader.QueryRow(`SELECT value FROM web_preferences WHERE key='idle_minutes'`).Scan(&minutes)
 	if err != nil {
 		return 0, err
 	}
@@ -239,45 +314,42 @@ func (s *Store) SetWebIdleMinutes(ctx context.Context, minutes int) error {
 	if minutes < 1 || minutes > 1440 {
 		return errors.New("idle timeout must be 1..1440 minutes")
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE web_preferences SET value=? WHERE key='idle_minutes'`, minutes)
-	return err
+	return s.write(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE web_preferences SET value=? WHERE key='idle_minutes'`, minutes)
+		return err
+	})
 }
 func (s *Store) Start(peer, ip, mode string, at time.Time) (int64, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	r, err := s.db.Exec(`INSERT INTO connections(peer,ip,mode,started_at,status) VALUES(?,?,?,?,'connected')`, peer, ip, mode, at.UnixMilli())
-	if err != nil {
-		return 0, err
-	}
-	id, err := r.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
-	if err = s.enforceBudgetLocked(); err != nil {
-		// Admission failed before a handler received its record ID.
-		_, _ = s.db.Exec(`DELETE FROM connections WHERE id=?`, id)
-		return 0, err
-	}
-	return id, nil
+	var id int64
+	err := s.write(func(tx *sql.Tx) error {
+		result, err := s.exec(tx, `INSERT INTO connections(peer,ip,mode,started_at,status) VALUES(?,?,?,?,'connected')`, peer, ip, mode, at.UnixMilli())
+		if err != nil {
+			return err
+		}
+		id, err = result.LastInsertId()
+		return err
+	})
+	return id, err
 }
 func (s *Store) Reject(peer, ip, mode, reason string) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	now := time.Now().UnixMilli()
-	_, err := s.db.Exec(`INSERT INTO connections(peer,ip,mode,started_at,ended_at,status,reason) VALUES(?,?,?,?,?,'rejected',?)`, peer, ip, mode, now, now, reason)
-	if err != nil {
+	return s.write(func(tx *sql.Tx) error {
+		_, err := s.exec(tx, `INSERT INTO connections(peer,ip,mode,started_at,ended_at,status,reason) VALUES(?,?,?,?,?,'rejected',?)`, peer, ip, mode, now, now, reason)
 		return err
-	}
-	return s.enforceBudgetLocked()
+	})
 }
 func (s *Store) Transport(id int64, client string) error {
-	_, err := s.db.Exec(`UPDATE connections SET status='authenticating',client_version=? WHERE id=?`, client, id)
-	return err
+	return s.write(func(tx *sql.Tx) error {
+		_, err := s.exec(tx, `UPDATE connections SET status='authenticating',client_version=? WHERE id=?`, client, id)
+		return err
+	})
 }
 func (s *Store) Username(id int64, name string) error {
 	name, _ = boundedText(name, 4096)
-	_, err := s.db.Exec(`UPDATE connections SET username=? WHERE id=?`, name, id)
-	return err
+	return s.write(func(tx *sql.Tx) error {
+		_, err := s.exec(tx, `UPDATE connections SET username=? WHERE id=?`, name, id)
+		return err
+	})
 }
 func boundedText(v string, max int) (string, bool) {
 	if len(v) <= max {
@@ -300,92 +372,97 @@ func credentialBytes(v []byte) (string, string, bool) {
 	return base64.StdEncoding.EncodeToString(v), "base64", truncated
 }
 func (s *Store) Attempt(a AuthRecord) (int64, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	var cut bool
 	a.Username, cut = boundedText(a.Username, 4096)
 	a.Truncated = a.Truncated || cut
 	a.PublicKey, cut = boundedText(a.PublicKey, 65536)
 	a.Truncated = a.Truncated || cut
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-	r, err := tx.Exec(`INSERT INTO auth_attempts(connection_id,at,username,method,credential,encoding,public_key,fingerprint,truncated) VALUES(?,?,?,?,?,?,?,?,?)`, a.ConnectionID, a.At, a.Username, a.Method, a.Credential, a.Encoding, a.PublicKey, a.Fingerprint, a.Truncated)
-	if err != nil {
-		return 0, err
-	}
-	if _, err = tx.Exec(`UPDATE connections SET auth_attempts=auth_attempts+1 WHERE id=?`, a.ConnectionID); err != nil {
-		return 0, err
-	}
-	id, err := r.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
-	if err = tx.Commit(); err != nil {
-		return 0, err
-	}
-	return id, s.enforceBudgetLocked()
+	var id int64
+	err := s.writeBulk(func(tx *sql.Tx) error {
+		result, err := s.exec(tx, `INSERT INTO auth_attempts(connection_id,at,username,method,credential,encoding,public_key,fingerprint,truncated) VALUES(?,?,?,?,?,?,?,?,?)`, a.ConnectionID, a.At, a.Username, a.Method, a.Credential, a.Encoding, a.PublicKey, a.Fingerprint, a.Truncated)
+		if err != nil {
+			return err
+		}
+		if _, err = s.exec(tx, `UPDATE connections SET auth_attempts=auth_attempts+1 WHERE id=?`, a.ConnectionID); err != nil {
+			return err
+		}
+		id, err = result.LastInsertId()
+		return err
+	}, int64(65536+4*(len(a.Credential)+len(a.PublicKey)+len(a.Username))))
+	return id, err
 }
 func (s *Store) AttemptResult(id int64, result string) error {
-	_, err := s.db.Exec(`UPDATE auth_attempts SET result=? WHERE id=?`, result, id)
-	return err
+	return s.write(func(tx *sql.Tx) error {
+		_, err := s.exec(tx, `UPDATE auth_attempts SET result=? WHERE id=?`, result, id)
+		return err
+	})
 }
 func (s *Store) Finish(id int64, duration time.Duration, status, reason string, sent, received uint64) error {
 	return s.finish(id, duration, status, reason, sent, received, 0)
 }
 func (s *Store) finish(id int64, duration time.Duration, status, reason string, sent, received uint64, delayed time.Duration) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	tx, err := s.db.Begin()
-	if err != nil {
+	ended := time.Now().UnixMilli()
+	return s.write(func(tx *sql.Tx) error {
+		if _, err := s.exec(tx, `UPDATE connections SET ended_at=?,duration_ms=?,status=?,reason=?,bytes_sent=?,bytes_received=?,delayed_ms=? WHERE id=?`, ended, duration.Milliseconds(), status, reason, sent, received, delayed.Milliseconds(), id); err != nil {
+			return err
+		}
+		_, err := s.exec(tx, `UPDATE auth_attempts SET result='interrupted' WHERE connection_id=? AND result='pending'`, id)
 		return err
-	}
-	defer tx.Rollback()
-	if _, err = tx.Exec(`UPDATE connections SET ended_at=?,duration_ms=?,status=?,reason=?,bytes_sent=?,bytes_received=?,delayed_ms=? WHERE id=?`, time.Now().UnixMilli(), duration.Milliseconds(), status, reason, sent, received, delayed.Milliseconds(), id); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(`UPDATE auth_attempts SET result='interrupted' WHERE connection_id=? AND result='pending'`, id); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-	return s.enforceBudgetLocked()
+	})
 }
+
+// Retention releases the writer after each small transaction. Authentication
+// writes can proceed while a large backlog is removed.
 func (s *Store) Prune(now time.Time, days int) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour).UnixMilli()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
+	for {
+		more, err := s.pruneStep(cutoff)
+		if err != nil {
+			return err
+		}
+		if !more {
+			break
+		}
 	}
-	defer tx.Rollback()
-	if _, err = tx.Exec(`UPDATE connections SET auth_attempts=(SELECT COUNT(*) FROM auth_attempts WHERE connection_id=connections.id AND at>=?) WHERE id IN (SELECT connection_id FROM auth_attempts WHERE at<?)`, cutoff, cutoff); err != nil {
+	return s.write(func(tx *sql.Tx) error {
+		if _, err := s.exec(tx, `DELETE FROM client_cooldowns WHERE expires_at<=?`, now.UnixMilli()); err != nil {
+			return err
+		}
+		if _, err := s.exec(tx, `DELETE FROM ip_slowdowns WHERE expires_at<=? AND NOT EXISTS(SELECT 1 FROM connections c JOIN connection_marks m ON m.connection_id=c.id WHERE c.ip=ip_slowdowns.ip AND c.ended_at IS NULL AND m.label='parallel_slow')`, now.UnixMilli()); err != nil {
+			return err
+		}
+		_, err := s.exec(tx, `DELETE FROM ip_probes WHERE (expires_at>0 AND expires_at<=?) OR (expires_at=0 AND updated_at<?)`, now.UnixMilli(), cutoff)
 		return err
-	}
-	if _, err = tx.Exec(`DELETE FROM auth_attempts WHERE at < ?`, cutoff); err != nil {
+	})
+}
+func (s *Store) pruneStep(cutoff int64) (bool, error) {
+	more := false
+	err := s.writeBulk(func(tx *sql.Tx) error {
+		var id int64
+		err := s.queryRow(tx, `SELECT connection_id FROM auth_attempts WHERE at<? ORDER BY at,id LIMIT 1`, cutoff).Scan(&id)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			more = true
+			_, err = s.deleteOldAuth(tx, id, cutoff)
+			return err
+		}
+		err = s.queryRow(tx, `SELECT id FROM connections WHERE started_at<? AND ended_at IS NOT NULL ORDER BY started_at,id LIMIT 1`, cutoff).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		more = true
+		if _, err = s.deleteOldAuth(tx, id, 0); err != nil {
+			return err
+		}
+		_, err = s.exec(tx, `DELETE FROM connections WHERE id=? AND auth_attempts=0`, id)
 		return err
-	}
-	if _, err = tx.Exec(`DELETE FROM connections WHERE started_at < ? AND ended_at IS NOT NULL`, cutoff); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(`DELETE FROM client_cooldowns WHERE expires_at<=?`, now.UnixMilli()); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(`DELETE FROM ip_slowdowns WHERE expires_at<=? AND NOT EXISTS(SELECT 1 FROM connections c JOIN connection_marks m ON m.connection_id=c.id WHERE c.ip=ip_slowdowns.ip AND c.ended_at IS NULL AND m.label='parallel_slow')`, now.UnixMilli()); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(`DELETE FROM ip_probes WHERE (expires_at>0 AND expires_at<=?) OR (expires_at=0 AND updated_at<?)`, now.UnixMilli(), cutoff); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-	_, err = s.db.Exec(`PRAGMA incremental_vacuum(128)`)
-	return err
+	}, 65536)
+	return more, err
 }
 func (s *Store) Maintain(ctx context.Context, days int, onError func(error)) {
 	ticker := time.NewTicker(time.Hour)
@@ -396,7 +473,13 @@ func (s *Store) Maintain(ctx context.Context, days int, onError func(error)) {
 		select {
 		case <-ctx.Done():
 			return
+		case err := <-s.budgetErrors:
+			onError(err)
 		case <-budgetTicker.C:
+			if err := s.checkDatabaseFile(); err != nil {
+				onError(err)
+				return
+			}
 			if err := s.EnforceBudget(); err != nil {
 				onError(err)
 			}
@@ -430,12 +513,12 @@ func (s *Store) List(ctx context.Context, f RecordFilter) (RecordPage, error) {
 	}
 	out := RecordPage{Items: []ConnectionRecord{}, Page: f.Page, Limit: f.Limit}
 	where, args := recordWhere(f)
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM connections WHERE `+where, args...).Scan(&out.Total); err != nil {
+	if err := s.reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM connections WHERE `+where, args...).Scan(&out.Total); err != nil {
 		return out, err
 	}
 	out.Page = recordPage(f, out.Total)
 	args = append(args, f.Limit, (out.Page-1)*f.Limit)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+connectionColumns+` FROM connections WHERE `+where+` ORDER BY started_at DESC,id DESC LIMIT ? OFFSET ?`, args...)
+	rows, err := s.reader.QueryContext(ctx, `SELECT `+connectionColumns+` FROM connections WHERE `+where+` ORDER BY started_at DESC,id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return out, err
 	}
@@ -450,7 +533,7 @@ func (s *Store) List(ctx context.Context, f RecordFilter) (RecordPage, error) {
 	return out, rows.Err()
 }
 func (s *Store) Detail(ctx context.Context, id int64) (ConnectionRecord, []AuthRecord, error) {
-	c, err := scanConnection(s.db.QueryRowContext(ctx, `SELECT `+connectionColumns+` FROM connections WHERE id=?`, id))
+	c, err := scanConnection(s.reader.QueryRowContext(ctx, `SELECT `+connectionColumns+` FROM connections WHERE id=?`, id))
 	if err != nil {
 		return c, nil, err
 	}
@@ -458,7 +541,7 @@ func (s *Store) Detail(ctx context.Context, id int64) (ConnectionRecord, []AuthR
 	if err != nil {
 		return c, nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,connection_id,at,username,method,credential,encoding,public_key,fingerprint,truncated,result FROM auth_attempts WHERE connection_id=? ORDER BY id`, id)
+	rows, err := s.reader.QueryContext(ctx, `SELECT id,connection_id,at,username,method,credential,encoding,public_key,fingerprint,truncated,result FROM auth_attempts WHERE connection_id=? ORDER BY id`, id)
 	if err != nil {
 		return c, nil, err
 	}
@@ -473,96 +556,4 @@ func (s *Store) Detail(ctx context.Context, id int64) (ConnectionRecord, []AuthR
 	}
 	return c, attempts, rows.Err()
 }
-func (s *Store) Stats(ctx context.Context) (StoredStats, error) {
-	out := StoredStats{Sources: []Ranking{}, Usernames: []Ranking{}, Passwords: []Ranking{}, Methods: []Ranking{}, ClientVersions: []Ranking{}, Daily: []DailyPoint{}}
-	today := time.Now().UTC().Truncate(24 * time.Hour).UnixMilli()
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(ended_at IS NULL),0),COUNT(DISTINCT ip),COALESCE(SUM(status='rejected'),0),COALESCE(SUM(started_at>=?),0) FROM connections`, today).Scan(&out.Connections, &out.Active, &out.UniqueIPs, &out.Rejected, &out.Today)
-	if err != nil {
-		return out, err
-	}
-	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM auth_attempts`).Scan(&out.Attempts); err != nil {
-		return out, err
-	}
-	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM auth_attempts WHERE result='rejected'`).Scan(&out.AuthRejected); err != nil {
-		return out, err
-	}
-	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM connections WHERE status='probe_blocked'`).Scan(&out.ProbeBlocked); err != nil {
-		return out, err
-	}
-	for _, item := range []struct {
-		query string
-		dst   *[]Ranking
-	}{
-		{`SELECT ip,COUNT(*) AS n FROM connections GROUP BY ip ORDER BY n DESC,ip LIMIT 10`, &out.Sources},
-		{`SELECT username,COUNT(*) AS n FROM auth_attempts GROUP BY username ORDER BY n DESC,username LIMIT 10`, &out.Usernames},
-		{`SELECT method,COUNT(*) AS n FROM auth_attempts GROUP BY method ORDER BY n DESC,method LIMIT 10`, &out.Methods},
-		{`SELECT client_version,COUNT(*) AS n FROM connections WHERE client_version<>'' GROUP BY client_version ORDER BY n DESC,client_version LIMIT 10`, &out.ClientVersions},
-		{`WITH passwords AS (
-		 SELECT credential AS password,encoding FROM auth_attempts WHERE method='password' AND truncated=0
-		 UNION ALL
-		 SELECT json_extract(CASE WHEN json_valid(credential) THEN credential ELSE 'null' END,'$[0]'),'utf8' FROM auth_attempts
-		 WHERE method='keyboard-interactive' AND encoding='utf8' AND truncated=0
-		 AND json_array_length(CASE WHEN json_valid(credential) THEN credential ELSE 'null' END)=1
-		 AND json_type(CASE WHEN json_valid(credential) THEN credential ELSE 'null' END,'$[0]')='text'
-		 ) SELECT CASE WHEN encoding='base64' THEN '[Base64] '||password ELSE password END,COUNT(*) AS n
-		 FROM passwords GROUP BY password,encoding ORDER BY n DESC,password,encoding LIMIT 10`, &out.Passwords},
-	} {
-		rows, err := s.db.QueryContext(ctx, item.query)
-		if err != nil {
-			return out, err
-		}
-		for rows.Next() {
-			var r Ranking
-			if err = rows.Scan(&r.Name, &r.Count); err != nil {
-				rows.Close()
-				return out, err
-			}
-			*item.dst = append(*item.dst, r)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return out, err
-		}
-	}
-	since := time.Now().UTC().Truncate(24 * time.Hour).Add(-29 * 24 * time.Hour)
-	days := map[string]*DailyPoint{}
-	for i := 0; i < 30; i++ {
-		day := since.Add(time.Duration(i) * 24 * time.Hour).Format("2006-01-02")
-		out.Daily = append(out.Daily, DailyPoint{Day: day})
-	}
-	for i := range out.Daily {
-		days[out.Daily[i].Day] = &out.Daily[i]
-	}
-	for _, table := range []string{"connections", "auth_attempts"} {
-		col := "started_at"
-		if table == "auth_attempts" {
-			col = "at"
-		}
-		rows, err := s.db.QueryContext(ctx, `SELECT strftime('%Y-%m-%d',`+col+`/1000,'unixepoch'),COUNT(*) FROM `+table+` WHERE `+col+`>=? GROUP BY 1`, since.UnixMilli())
-		if err != nil {
-			return out, err
-		}
-		for rows.Next() {
-			var day string
-			var n int64
-			if err = rows.Scan(&day, &n); err != nil {
-				rows.Close()
-				return out, err
-			}
-			if p := days[day]; p != nil {
-				if table == "connections" {
-					p.Connections = n
-				} else {
-					p.Attempts = n
-				}
-			}
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return out, err
-		}
-	}
-	return out, nil
-}
+func (s *Store) Stats(ctx context.Context) (StoredStats, error) { return s.storedStats(ctx) }

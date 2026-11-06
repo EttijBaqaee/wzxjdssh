@@ -17,14 +17,35 @@ func (c *clientConn) credentialWatch() func() {
 	if c.cfg.Mode != "ssh" || c.probeUntil > 0 {
 		return func() {}
 	}
-	left := c.cfg.CredentialTimeout - time.Since(c.started)
-	timer := time.AfterFunc(max(time.Duration(0), left), func() {
-		if c.credentialState.CompareAndSwap(credentialWaiting, credentialExpired) {
+	c.readDeadlineMu.Lock()
+	c.credentialRemaining = c.cfg.CredentialTimeout
+	c.credentialSince = time.Now()
+	c.credentialTimer = time.AfterFunc(c.credentialRemaining, func() {
+		c.readDeadlineMu.Lock()
+		if c.credentialTimer == nil || c.serverWork > 0 || c.credentialState.Load() != credentialWaiting {
+			c.readDeadlineMu.Unlock()
+			return
+		}
+		left := c.credentialRemaining - time.Since(c.credentialSince)
+		if left > 0 {
+			c.credentialTimer.Reset(left)
+			c.readDeadlineMu.Unlock()
+			return
+		}
+		expired := c.credentialState.CompareAndSwap(credentialWaiting, credentialExpired)
+		c.readDeadlineMu.Unlock()
+		if expired {
 			c.cancel()
 			c.Conn.Close()
 		}
 	})
-	return func() { timer.Stop() }
+	c.readDeadlineMu.Unlock()
+	return func() {
+		c.readDeadlineMu.Lock()
+		defer c.readDeadlineMu.Unlock()
+		c.credentialTimer.Stop()
+		c.credentialTimer = nil
+	}
 }
 
 func (c *clientConn) submittedCredential(username string) error {

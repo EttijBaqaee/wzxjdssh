@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 )
 
@@ -35,18 +34,5 @@ func (c *clientConn) checkpointPeerVerification() {
 // Merge all live samples with stored checkpoints, including sessions which end
 // between snapshot and query. The maximum per ID prevents double counting.
 func (s *Store) TotalVerifiedPostAuth(ctx context.Context, active []liveDelay) (int64, error) {
-	data, err := json.Marshal(active)
-	if err != nil {
-		return 0, err
-	}
-	var total int64
-	err = s.db.QueryRowContext(ctx, `WITH samples AS (
-	 SELECT connection_id AS id,MAX(0,COALESCE(json_extract(trace,'$.verified_post_auth_ms'),0)) AS verified
-	 FROM simulated_sessions WHERE json_extract(trace,'$.verification_version')=1
-	 UNION ALL
-	 SELECT CAST(json_extract(value,'$.id') AS INTEGER),MAX(0,COALESCE(CAST(json_extract(value,'$.verified_post_auth_ms') AS INTEGER),0))
-	 FROM json_each(?) WHERE EXISTS(SELECT 1 FROM connections WHERE id=CAST(json_extract(value,'$.id') AS INTEGER))
-	), per_connection AS (SELECT id,MAX(verified) AS verified FROM samples GROUP BY id)
-	 SELECT COALESCE(SUM(verified),0) FROM per_connection`, string(data)).Scan(&total)
-	return total, err
+	return s.overlayTotal(ctx, "verified_ms", active)
 }

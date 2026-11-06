@@ -33,15 +33,40 @@ func (s *Store) ClearRecords(ctx context.Context) (int64, bool, error) {
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM connections`).Scan(&count); err != nil {
 		return 0, false, err
 	}
+	// All summaries are cleared in this same transaction. Disable their
+	// triggers first, so clearing millions of rows does not update counters
+	// individually only to delete those counters immediately afterwards.
+	for name := range analyticsTriggers() {
+		if _, err = tx.ExecContext(ctx, `DROP TRIGGER wzx_`+name); err != nil {
+			return 0, false, err
+		}
+	}
 	for _, table := range []string{"auth_attempts", "connection_marks", "simulated_sessions", "connections", "client_cooldowns", "ip_slowdowns", "ip_probes"} {
 		if _, err = tx.ExecContext(ctx, `DELETE FROM `+table); err != nil {
 			return 0, false, err
 		}
 	}
+	for _, table := range []string{"analytics_groups", "analytics_days", "analytics_ips"} {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM `+table); err != nil {
+			return 0, false, err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE analytics_totals SET value=0`); err != nil {
+		return 0, false, err
+	}
+	for name, body := range analyticsTriggers() {
+		if _, err = tx.ExecContext(ctx, `CREATE TRIGGER wzx_`+name+` `+body); err != nil {
+			return 0, false, err
+		}
+	}
+
 	if err = tx.Commit(); err != nil {
 		return 0, false, err
 	}
 	s.capacityDeleted.Store(0)
+	s.budgetPruning = false
+	s.budgetCheckedAt = time.Time{}
+	s.budgetReclaimedAt = time.Time{}
 	if _, err = s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 		return count, true, err
 	}

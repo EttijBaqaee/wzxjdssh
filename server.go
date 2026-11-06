@@ -408,6 +408,10 @@ type clientConn struct {
 	authStage           atomic.Bool
 	bytesSent           atomic.Uint64
 	readDeadlineMu      sync.Mutex
+	serverWork          int         // Protected by readDeadlineMu; not client idle time.
+	credentialTimer     *time.Timer // Protected by readDeadlineMu.
+	credentialRemaining time.Duration
+	credentialSince     time.Time
 	writeMu             sync.Mutex
 	delaying            bool
 	recordID            int64
@@ -450,9 +454,32 @@ func (c *clientConn) releasePending() {
 	}
 }
 
+func (c *clientConn) beginServerWork() {
+	c.readDeadlineMu.Lock()
+	defer c.readDeadlineMu.Unlock()
+	if c.serverWork == 0 && c.credentialTimer != nil && c.credentialState.Load() == credentialWaiting {
+		c.credentialTimer.Stop()
+		c.credentialRemaining -= time.Since(c.credentialSince)
+	}
+	c.serverWork++
+	_ = c.Conn.SetReadDeadline(time.Time{})
+}
+func (c *clientConn) endServerWork() {
+	c.readDeadlineMu.Lock()
+	defer c.readDeadlineMu.Unlock()
+	c.serverWork--
+	if c.serverWork == 0 && c.credentialTimer != nil && c.credentialState.Load() == credentialWaiting {
+		c.credentialSince = time.Now()
+		c.credentialTimer.Reset(max(time.Duration(0), c.credentialRemaining))
+	}
+	if c.serverWork == 0 && c.authStage.Load() && !c.delaying && !c.simulated.Load() {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.cfg.IdleTimeout))
+	}
+}
+
 func (c *clientConn) Read(p []byte) (int, error) {
 	c.readDeadlineMu.Lock()
-	if c.authStage.Load() && !c.delaying && !c.simulated.Load() {
+	if c.authStage.Load() && c.serverWork == 0 && !c.delaying && !c.simulated.Load() {
 		_ = c.Conn.SetReadDeadline(time.Now().Add(c.cfg.IdleTimeout))
 	}
 	c.readDeadlineMu.Unlock()
@@ -518,8 +545,8 @@ func (c *clientConn) Write(p []byte) (int, error) {
 }
 
 func (s *Server) handle(c *clientConn) {
-	stopCredentialWatch := c.credentialWatch()
-	defer stopCredentialWatch()
+	stopCredentialWatch := func() {}
+	defer func() { stopCredentialWatch() }()
 	defer close(c.done)
 	defer s.wg.Done()
 	defer func() {
@@ -610,21 +637,16 @@ func (s *Server) handle(c *clientConn) {
 		duration := time.Since(c.started)
 		if s.store != nil && c.recordID != 0 {
 			s.policyMu.Lock()
-			if c.forceSlow.Load() {
-				s.storageError(s.store.ForceParallelIP(c.ip, time.Now().Add(c.cfg.ParallelCooldown).UnixMilli()))
-			}
+			retry := false
 			if c.clientVersion != "" {
-				if s.singleAuth.observe(authDelayKey{c.ip, c.clientVersion}, c.singleAuthRetryEligible(status, reason, stopping), time.Now(), c.cfg) {
-					_, err := s.store.markClientCooldown(c.recordID, c.ip, c.clientVersion, "single_auth_retry", time.Now(), c.cfg.SingleAuthRetryCooldown)
-					s.storageError(err)
-				}
+				retry = s.singleAuth.observe(authDelayKey{c.ip, c.clientVersion}, c.singleAuthRetryEligible(status, reason, stopping), time.Now(), c.cfg)
 			}
-			s.storageError(s.store.finish(c.recordID, duration, status, reason, c.bytesSent.Load(), c.bytesReceived.Load(), delayed))
-			if !stopping && c.probeUntil == 0 && c.cfg.Mode == "ssh" && reason != "no_credentials" {
-				_, err := s.store.ProbeResult(c.recordID, c.ip, reason == "handshake_incomplete", time.Now(), c.cfg)
-				s.storageError(err)
-			}
+			job, err := s.store.enqueueCompletion(connectionCompletion{ID: c.recordID, IP: c.ip, Version: c.clientVersion, At: time.Now(), Duration: duration, Delayed: delayed, Status: status, Reason: reason, Sent: c.bytesSent.Load(), Received: c.bytesReceived.Load(), Parallel: c.forceSlow.Load(), Retry: retry, Probe: !stopping && c.probeUntil == 0 && c.cfg.Mode == "ssh" && reason != "no_credentials", Config: c.cfg})
 			s.policyMu.Unlock()
+			if err == nil {
+				err = <-job.done
+			}
+			s.storageError(err)
 		}
 		// Keep the live sample available until its final delay is persisted.
 		s.mu.Lock()
@@ -659,6 +681,7 @@ func (s *Server) handle(c *clientConn) {
 			s.storageError(s.store.MarkProbeConnection(id, c.probeUntil))
 		}
 	}
+	stopCredentialWatch = c.credentialWatch()
 	if c.probeUntil > 0 {
 		s.discardProbe(c)
 		return
@@ -678,11 +701,12 @@ func (s *Server) handle(c *clientConn) {
 	}
 	// Callback runs only after SSH transport and key exchange are ready.
 	cfg.PreAuthConnCallback = func(meta ssh.ServerPreAuthConn) {
+		c.beginServerWork()
+		defer c.endServerWork()
 		c.retainSlowConnection()
 		c.clientVersion = string(meta.ClientVersion())
 		c.authStage.Store(true)
 		c.releasePending()
-		_ = c.Conn.SetReadDeadline(time.Now().Add(c.cfg.IdleTimeout))
 		if s.store != nil {
 			s.policyMu.Lock()
 			defer s.policyMu.Unlock()
@@ -739,6 +763,8 @@ func (s *Server) handle(c *clientConn) {
 		return denied
 	}
 	record := func(meta ssh.ConnMetadata, method string, credential []byte, key ssh.PublicKey) (int64, error) {
+		c.beginServerWork()
+		defer c.endServerWork()
 		if err := c.submittedCredential(meta.User()); err != nil {
 			return 0, err
 		}
@@ -764,6 +790,8 @@ func (s *Server) handle(c *clientConn) {
 		return id, nil
 	}
 	finishAttempt := func(id int64, err error) error {
+		c.beginServerWork()
+		defer c.endServerWork()
 		c.rejectedAuth = errors.Is(err, denied)
 		if s.store != nil && id != 0 {
 			result := "rejected"
@@ -815,6 +843,8 @@ func (s *Server) handle(c *clientConn) {
 		return nil, respond(id)
 	}
 	cfg.AuthLogCallback = func(meta ssh.ConnMetadata, method string, err error) {
+		c.beginServerWork()
+		defer c.endServerWork()
 		if s.store != nil {
 			if err := s.store.Username(c.recordID, meta.User()); err != nil {
 				s.storageError(err)
@@ -939,8 +969,19 @@ func (s *Server) Snapshot() map[string]any {
 
 func (s *Server) storageError(err error) {
 	if err != nil {
-		s.storageErrors.Add(1)
-		s.log(0, "storage_error", map[string]any{"error": "database operation failed"})
+		n := s.storageErrors.Add(1)
+		if s.store != nil {
+			s.store.noteStorageFailure(err)
+		}
+		if n > 5 && n%256 != 0 {
+			return
+		}
+		fields := map[string]any{"error": "database operation failed"}
+		var coded interface{ Code() int }
+		if errors.As(err, &coded) {
+			fields["sqlite_code"] = coded.Code()
+		}
+		s.log(0, "storage_error", fields)
 	}
 }
 

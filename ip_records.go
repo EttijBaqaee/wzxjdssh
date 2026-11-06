@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"strings"
 	"time"
 )
@@ -55,7 +54,7 @@ func recordWhere(f RecordFilter) (string, []any) {
 		args = append(args, f.Status)
 	}
 	if f.Username != "" {
-		clauses = append(clauses, "(username=? OR EXISTS(SELECT 1 FROM auth_attempts a WHERE a.connection_id=connections.id AND a.username=?))")
+		clauses = append(clauses, "id IN (SELECT id FROM connections WHERE username=? UNION SELECT connection_id FROM auth_attempts WHERE username=?)")
 		args = append(args, f.Username, f.Username)
 	}
 	return strings.Join(clauses, " AND "), args
@@ -78,12 +77,18 @@ func recordPage(f RecordFilter, total int64) int {
 // Filters apply to individual connections, then matching records group by IP.
 // Port-level data remains available in the paginated per-IP drill-down.
 func (s *Store) ListIPs(ctx context.Context, f RecordFilter) (IPRecordPage, error) {
+	if f.Username == "" {
+		if f.Status == "" {
+			return s.fastIPs(ctx, f)
+		}
+		return s.statusIPs(ctx, f)
+	}
 	if f.Limit < 1 || f.Limit > 100 {
 		f.Limit = 25
 	}
 	out := IPRecordPage{Items: []IPRecord{}, Limit: f.Limit}
 	where, args := recordWhere(f)
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return out, err
 	}
@@ -123,31 +128,5 @@ func (s *Store) ListIPs(ctx context.Context, f RecordFilter) (IPRecordPage, erro
 // Overlay by connection ID rather than adding live totals. If a connection
 // finishes between the snapshot and query, its delay is counted only once.
 func (s *Store) DelayRanking(ctx context.Context, active []liveDelay) ([]IPDelay, error) {
-	payload, err := json.Marshal(active)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, `WITH samples AS (
-	 SELECT json_extract(value,'$.id') AS id,json_extract(value,'$.delayed_ms') AS delayed,json_extract(value,'$.duration_ms') AS duration FROM json_each(?)
-	), live AS (SELECT id,MAX(delayed) AS delayed,MAX(duration) AS duration FROM samples GROUP BY id), measured AS (
-	 SELECT c.id,c.ip,MAX(c.delayed_ms,COALESCE(l.delayed,0)) AS delayed,
-	 CASE WHEN c.ended_at IS NULL THEN COALESCE(NULLIF(l.duration,0),MAX(0,?-c.started_at)) ELSE c.duration_ms END AS duration
-	 FROM connections c LEFT JOIN live l ON l.id=c.id
-	), ranked AS (
-	 SELECT *,SUM(delayed) OVER(PARTITION BY ip) AS total,MAX(delayed) OVER(PARTITION BY ip) AS max_delay,
-	 ROW_NUMBER() OVER(PARTITION BY ip ORDER BY duration DESC,id DESC) AS position FROM measured
-	) SELECT ip,total,duration,id,max_delay FROM ranked WHERE position=1 AND total>0 ORDER BY duration DESC,total DESC,ip LIMIT 10`, string(payload), time.Now().UnixMilli())
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []IPDelay{}
-	for rows.Next() {
-		var item IPDelay
-		if err = rows.Scan(&item.IP, &item.DelayedMS, &item.LongestMS, &item.LongestConnectionID, &item.MaxDelayedMS); err != nil {
-			return nil, err
-		}
-		out = append(out, item)
-	}
-	return out, rows.Err()
+	return s.fastDelayRanking(ctx, active)
 }

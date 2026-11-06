@@ -6,9 +6,11 @@
 
 A Docker-deployed SSH honeypot with real SSHv2 negotiation, delayed authentication rejection, isolated simulated sessions, SQLite records and a web console.
 
-Current published version: **2.1.2**. Image: `ghcr.io/ettijbaqaee/wzxjdssh:2.1.2` for Linux amd64. The `latest` tag is also available.
+Current release: **2.2.0**. Image: `ghcr.io/ettijbaqaee/wzxjdssh:2.2.0` for Linux amd64. The `latest` tag is also available.
 
 The default SSH identification is `SSH-2.0-OpenSSH_10.6p1`, the version before the [OpenSSH 10.6p2 security fix](https://www.openssh.com/txt/release-10.6p2), without a Debian suffix. Only the advertised identification changes; the underlying implementation remains Go SSH. A non-empty `WZXJDSSH_SERVER_VERSION` overrides the default.
+
+Settings shows the active SSH banner above Clear database. Confirm the administrator password to change it without restarting. The input fixes the `SSH-2.0-` prefix; enter only the version and optional comment. The complete identification must be printable ASCII and at most 253 bytes. Changes apply to new SSH connections and leave existing connections intact. Web changes are process-local and do not modify Compose or SQLite. Restarting or reloading configuration restores the existing Compose and configuration-file precedence.
 
 ## Web console languages and appearance
 
@@ -77,6 +79,8 @@ Non-empty policy environment variables override the configuration file. Command-
 
 Keep both persistent volumes across upgrades. Bind-mounted directories must be writable by container UID/GID `65532:65532`, unless your Compose explicitly uses another user to initialize them. Only one instance may write to a given SQLite directory. Back up a stopped service's entire records volume, or use the SQLite Backup API for a live backup; copying only the main database may omit WAL data.
 
+Version 2.2.0 validates existing database structure and integrity before listening. The records volume also contains `records.sqlite.initialized`. If a previously initialized database is missing, truncated or damaged, startup is refused. Detected file loss, replacement, obvious damage or permanent SQLite read/write errors during operation stop SSH and Web with a nonzero exit status. Existing files are preserved; no empty replacement database is created. Stop the deployment, preserve the affected directory and restore a complete backup. A first-time empty directory is initialized normally. If the entire directory and its initialization marker disappear together, the application cannot distinguish that from a first deployment.
+
 Captured authentication data is sensitive. Restrict access to the console, volumes and backups. A public-key probe records the public key supplied by the client and does not prove possession of its private key.
 
 `WZXJDSSH_DATABASE_MAX_MB=1024` enables an approximately 1 GiB database limit, including WAL/SHM. Cleanup removes the oldest history first and aims for about 90% of the limit to reduce repeated cleanup. Active connection metadata is retained. Writes and cleanup can briefly exceed the limit. The limit does not cover logs, backups, host keys or IP databases.
@@ -119,9 +123,11 @@ After sign-in, the console checks the latest stable GitHub release. A newer vers
 
 Checks have an 8-second timeout and one request in flight, use ETag and cache successful results for one hour. Automatic retries after failure wait ten minutes; manual checks are limited to one every 30 seconds. Failures preserve the last valid result and display a reason. Draft and prerelease versions are excluded.
 
-To upgrade to **2.1.2**, pull `ghcr.io/ettijbaqaee/wzxjdssh:2.1.2`, change the original Compose image tag, and recreate the service while keeping its data volumes and project name. No new environment variables are needed for language or theme controls. The existing host-network, port 22, web port 2223 and reverse-proxy path settings remain compatible.
+To upgrade to **2.2.0**, pull `ghcr.io/ettijbaqaee/wzxjdssh:2.2.0`, change the original Compose image tag, and recreate the service while keeping its data volumes and project name. No new environment variables are needed for language or theme controls. The existing host-network, port 22, web port 2223 and reverse-proxy path settings remain compatible.
 
 Release assets include the runtime image, runtime source and deployment documentation. See [CHANGELOG.md](CHANGELOG.md) for release changes.
+
+Version 2.2.0 upgrades the SQLite schema to version 4 and maintains transactional summaries for statistics and rankings. Stop the Compose deployment and back up the records volume before upgrading. Allow extra disk space for migration and WAL files. To roll back, restore both the earlier image and its database backup; earlier binaries cannot open the upgraded schema. Existing Compose parameters remain valid.
 
 ## License
 

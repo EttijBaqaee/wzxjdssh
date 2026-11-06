@@ -16,7 +16,27 @@ function renderClearDB(data){
  if(wasRunning&&!clearingDatabase){state.page=1;for(const id of ['detail-dialog','ip-dialog'])if($(id).open)$(id).close();$('detail-attempts').replaceChildren();api('emergency').then(renderEmergency).catch(()=>{});}
  if(clearingDatabase&&!clearPoll)clearPoll=setTimeout(async()=>{clearPoll=0;try{renderClearDB(await api('database/clear'));}catch(err){$('clear-db-status').textContent=err.message;}},1000);
 }
-async function loadDatabaseTools(){const [ipdb,clear]=await Promise.all([api('ipdb'),api('database/clear')]);renderIPDB(ipdb);renderClearDB(clear);}
+let bannerDirty=false,bannerLoaded=false,pendingBanner='';
+function renderBanner(data,replaceInput=false){
+ $('banner-current').textContent=data.server_version;
+ if(replaceInput||!bannerDirty){$('banner-value').value=data.server_version.slice('SSH-2.0-'.length);bannerDirty=false;}
+ bannerLoaded=true;$('banner-save').disabled=false;
+}
+async function loadDatabaseTools(){const [ipdb,clear,banner]=await Promise.all([api('ipdb'),api('database/clear'),api('banner')]);renderIPDB(ipdb);renderClearDB(clear);renderBanner(banner);}
+$('banner-value').addEventListener('input',()=>{bannerDirty=true;$('banner-message').textContent='';});
+$('banner-form').addEventListener('submit',async event=>{
+ event.preventDefault();if(!bannerLoaded)return;pendingBanner='SSH-2.0-'+$('banner-value').value;$('banner-pending').textContent=pendingBanner;$('banner-error').textContent='';$('banner-password').value='';$('banner-dialog').showModal();$('banner-password').focus();
+});
+$('cancel-banner').addEventListener('click',()=>$('banner-dialog').close());
+$('banner-dialog').addEventListener('close',()=>{$('banner-password').value='';$('banner-error').textContent='';$('banner-pending').textContent='';pendingBanner='';});
+$('banner-confirm-form').addEventListener('submit',async event=>{
+ event.preventDefault();const button=$('banner-confirm'),message=$('banner-message');button.disabled=true;$('banner-error').textContent='';message.textContent='';
+ const password=$('banner-password').value.trim(),server_version=pendingBanner;$('banner-password').value='';
+ try{const data=await api('banner',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,server_version})});$('banner-dialog').close();renderBanner(data,true);message.className='muted';message.textContent=t('横幅已修改，新 SSH 连接立即生效。');}
+ catch(err){$('banner-error').textContent=err.message;}
+ finally{button.disabled=false;}
+});
+document.addEventListener('console-logout',()=>{if($('banner-dialog').open)$('banner-dialog').close();$('banner-password').value='';$('banner-value').value='';$('banner-current').textContent='—';$('banner-message').textContent='';bannerDirty=false;bannerLoaded=false;$('banner-save').disabled=true;});
 $('ipdb-update').addEventListener('click',async()=>{const button=$('ipdb-update');button.disabled=true;$('ipdb-message').textContent='';try{renderIPDB(await api('ipdb/update',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}));$('ipdb-message').textContent=t('后台更新已提交；下载失败时保留原库，SSH 服务不受影响。');}catch(err){$('ipdb-message').textContent=err.message;button.disabled=false;}});
 $('clear-database').addEventListener('click',()=>{$('clear-db-error').textContent='';$('clear-db-password').value='';$('clear-db-dialog').showModal();$('clear-db-password').focus();});
 $('cancel-clear-db').addEventListener('click',()=>$('clear-db-dialog').close());

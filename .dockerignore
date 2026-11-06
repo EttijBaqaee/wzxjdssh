@@ -14,9 +14,7 @@ ssh_host_*
 .hostkey-*
 *.zip
 *.b64
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
+*.sqlite*
 
 *_test.go
 *validation*

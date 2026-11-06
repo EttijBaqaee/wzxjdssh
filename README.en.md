@@ -6,7 +6,9 @@
 
 A Docker-deployed SSH honeypot with real SSHv2 negotiation, delayed authentication rejection, isolated simulated sessions, SQLite records and a web console.
 
-Current version: **2.1.1**. Image: `ghcr.io/ettijbaqaee/wzxjdssh:2.1.1` for Linux amd64. The `latest` tag is also available.
+Current published version: **2.1.2**. Image: `ghcr.io/ettijbaqaee/wzxjdssh:2.1.2` for Linux amd64. The `latest` tag is also available.
+
+The default SSH identification is `SSH-2.0-OpenSSH_10.6p1`, the version before the [OpenSSH 10.6p2 security fix](https://www.openssh.com/txt/release-10.6p2), without a Debian suffix. Only the advertised identification changes; the underlying implementation remains Go SSH. A non-empty `WZXJDSSH_SERVER_VERSION` overrides the default.
 
 ## Web console languages and appearance
 
@@ -45,7 +47,7 @@ WZXJDSSH_WEB_BASE_PATH=/wzxjdssh/
 
 An empty admin username defaults to `admin`. The password must contain at least 12 bytes. The supplied Compose file maps host SSH port `2222` to container port `2222`; set `WZXJDSSH_PORT=22` only after ensuring it will not conflict with the host's real SSH service. Web access is bound to host loopback by default. Use an HTTPS reverse proxy for remote administration.
 
-The default SSH identification is `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`. Set `WZXJDSSH_SERVER_VERSION` to another full ASCII `SSH-2.0-...` string if needed. An empty value in the supplied Compose file uses the built-in default. This changes the identification string, not the underlying SSH implementation. No host SSH port detection is performed.
+The server defaults to `SSH-2.0-OpenSSH_10.6p1`. Set `WZXJDSSH_SERVER_VERSION` to another full ASCII `SSH-2.0-...` string if needed. An empty value in the supplied Compose file expands to `SSH-2.0-OpenSSH_10.6p1` and overrides the image's built-in identification. This changes the identification string, not the underlying SSH implementation. No host SSH port detection is performed.
 
 The Chinese [Compose and upgrade guide](COMPOSE.zh-CN.md) documents every environment setting, host networking, bind mounts and reverse-proxy examples. [Default configuration](configs/wzxjdssh.conf) lists the core policy values.
 
@@ -99,6 +101,8 @@ After simulated authentication succeeds, the server immediately requests an SSH-
 
 The defaults are a 60-second interval, 30-second response windows and three missed windows. Only one request per connection can be outstanding. The response calculation excludes deliberate local delays but also has a hard overall bound, preventing endless extension. FIN/RST disconnects are reclaimed promptly. Responsive slow connections have no fixed lifetime deadline.
 
+The teal duration in the live-connections ranking is labeled **Total server delay**. It sums deliberate authentication and response waits, including the ongoing delay. Waiting for the client, heartbeat intervals and connection age alone are excluded. Online duration and verified simulated time remain separate measures.
+
 “Verified simulated time” advances only to the latest valid SSH reply. The subsequent unconfirmed tail is shown separately. Older records are not retroactively estimated. Connection duration, confirmed time and actual server delay measure different things. SSH responsiveness does not establish that a scanner has stopped other work.
 
 ## IP geolocation
@@ -115,7 +119,7 @@ After sign-in, the console checks the latest stable GitHub release. A newer vers
 
 Checks have an 8-second timeout and one request in flight, use ETag and cache successful results for one hour. Automatic retries after failure wait ten minutes; manual checks are limited to one every 30 seconds. Failures preserve the last valid result and display a reason. Draft and prerelease versions are excluded.
 
-To upgrade to **2.1.1**, pull `ghcr.io/ettijbaqaee/wzxjdssh:2.1.1`, change the original Compose image tag, and recreate the service while keeping its data volumes and project name. No new environment variables are needed for language or theme controls. The existing host-network, port 22, web port 2223 and reverse-proxy path settings remain compatible.
+To upgrade to **2.1.2**, pull `ghcr.io/ettijbaqaee/wzxjdssh:2.1.2`, change the original Compose image tag, and recreate the service while keeping its data volumes and project name. No new environment variables are needed for language or theme controls. The existing host-network, port 22, web port 2223 and reverse-proxy path settings remain compatible.
 
 Release assets include the runtime image, runtime source and deployment documentation. See [CHANGELOG.md](CHANGELOG.md) for release changes.
 

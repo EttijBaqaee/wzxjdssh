@@ -8,9 +8,11 @@
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后先进行自适应随机等待，再收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
 
-当前版本：**2.1.1**
+当前已发布版本：**2.1.2**
 
-镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.1.1`（Linux amd64），同时提供 `latest` 标签。
+镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.1.2`（Linux amd64），同时提供 `latest` 标签。
+
+默认 SSH 标识为 `SSH-2.0-OpenSSH_10.6p1`，对应 [OpenSSH 10.6p2 安全修复](https://www.openssh.com/txt/release-10.6p2)前的版本，不带 Debian 后缀；仅改变对外标识，底层仍使用 Go SSH 实现。非空 `WZXJDSSH_SERVER_VERSION` 可覆盖默认标识。
 
 ## 后台语言与主题
 
@@ -61,19 +63,19 @@
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.1`，无需自行构建。
+1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.2`，无需自行构建。
 2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`；缺少镜像时会自动拉取。
 3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
-编排使用 `pull_policy: missing`，固定到 `2.1.1` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.1.1`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像。
+编排使用 `pull_policy: missing`，固定到 `2.1.2` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.1.2`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像。
 
 ### 常用编排参数
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
 | `WZXJDSSH_PORT` | `2222` | 宿主机入口端口；容器内部仍监听 2222 |
-| `WZXJDSSH_SERVER_VERSION` | `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4` | 对外发送的 SSH 版本标识，未设置或留空时使用此默认值 |
+| `WZXJDSSH_SERVER_VERSION` | `SSH-2.0-OpenSSH_10.6p1` | 对外发送的 SSH 版本标识，配套编排在未设置或留空时使用此值 |
 | `WZXJDSSH_WEB_PORT` | `2223` | Web UI 宿主机端口 |
 | `WZXJDSSH_WEB_BIND` | `127.0.0.1` | Web 绑定地址；直接远程访问可设 `0.0.0.0` |
 | `WZXJDSSH_ADMIN_USERNAME` | `admin` | 管理员用户名，未填写或留空时使用 admin |
@@ -113,7 +115,7 @@ WZXJDSSH_SERVER_VERSION=SSH-2.0-OpenSSH_9.9
 WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 ```
 
-仅修改端口、保留 Debian 标识：
+仅修改端口、使用配套编排的默认标识：
 
 ```dotenv
 WZXJDSSH_PORT=22
@@ -127,7 +129,7 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 
 同 IP 并发标记在最后一条连接断开后默认闲置 1 小时冷却，期间重连重新计时；历史连接标签保留。
 
-升级至 2.1.1 时，拉取新镜像并将编排标签改为 `2.1.1`，重建容器，保留数据卷。
+升级至 2.1.2 时，拉取新镜像并将编排标签改为 `2.1.2`，重建容器，保留数据卷。
 
 2.0.6 的无凭据探针按单条连接处理，默认提交期限为 20 秒；提前断开也只记录当前连接，不累计 IP 探针次数、不创建 IP 冷却。同 IP 已提交凭据的其他连接继续正常策略。升级前已存在的 IP 探针标签仅兼容至原到期时间，不续期。
 
@@ -158,12 +160,12 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 | `WriteTimeout` | 5000 | 一次完整写入的超时 |
 | `MaxConnectionTime` | 0 | 0 不限时；非零值只约束慢速阶段前的连接，不限制慢速横幅、延迟认证或仿真会话 |
 | `HostKeyDirectory` | /data | 主机密钥目录，启动后不能热改 |
-| `ServerVersion` | SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4 | 配置文件中的默认 SSH 标识 |
+| `ServerVersion` | SSH-2.0-OpenSSH_10.6p1 | 当前源码配置文件中的默认 SSH 标识 |
 | `LogLevel` | 0 | 0 重要事件，1 连接与认证事件，2 调试 |
 
 配置接受空格、Tab 和 `#` 注释。未知键、重复键、非法数值和打不开的显式配置文件均报错。非空策略环境变量覆盖配置文件，未设置或空值沿用文件；配套编排会展开为表中默认值。命令行选项覆盖相应配置与环境变量；`-v` 开启连接日志，`-vv` 开启调试日志。
 
-**标识优先级：**非空 `WZXJDSSH_SERVER_VERSION` 环境变量覆盖配置文件中的 `ServerVersion`。配套编排始终传入该值，留空时展开为 Debian 默认值。若通过挂载配置文件定制了 `ServerVersion`，应将编排参数也设置为同样的值，或移除服务 `environment` 中的这个变量。
+**标识优先级：**非空 `WZXJDSSH_SERVER_VERSION` 环境变量覆盖配置文件中的 `ServerVersion`。配套编排始终传入该值，留空时展开为 `SSH-2.0-OpenSSH_10.6p1`。若通过挂载配置文件定制了 `ServerVersion`，应将编排参数也设置为同样的值，或移除服务 `environment` 中的这个变量。
 
 ## 数据与运维
 
@@ -209,6 +211,8 @@ Web 管理会话默认闲置 1 小时自动退出，可在“管理设置”修�
 仿真认证成功只表示 SSH 已接受认证，不代表已长期留住客户端。学习增加等待的条件为 shell 或 exec 请求接受后，连接继续保持至少一个 `Delay` 基础周期（默认 10 秒）；仅开通道、发送全局请求或保活不算成功。短暂会话后主动退出会减少后续认证等待，仍遵守 3 秒下限。连接详情记录认证完成时间、认证前耗时、认证后停留、通道和会话请求阶段及底层结束信息；旧记录没有阶段数据时明确显示未采集。阶段事件每连接最多 32 条，只记动作类型与时间，不复制命令或输入正文，跟随连接记录一起清理。
 
 冷却重连若仍在认证等待中断开，将该次真实认证等待减去一步调整量作为新的等待上限，直接下调；适用于升级重启后内存学习重置和低频重连，仍不少于 3 秒，并保持随机扰动。不延长标签冷却，不持久化学习结果，握手时间不混入样本。
+
+实时连接榜单的青色时长标注为“累计主动延迟”，只累计认证等待和主动延迟响应，包含当前延迟；等待客户端下一步、心跳间隔和单纯连接存活时间不计入。“在线”与“仿真已确认”分别显示连接持续时间及经过 SSH 响应核验的在线时长。
 
 首页统计口径：拖延中 IP / 连接统计仍在线且已实际进入拖延流程的来源，等待客户端下一步时仍计入；旁边另列此刻处于延迟响应计时中的数量。握手未完成及探针静默不充作已拖延。认证拒绝按已返回 rejected 的认证尝试计数；接入拦截合计限流等接入拒绝与探针静默，并列出两者。累计实际拖延合计当前保留记录和全部在线连接的实测等待，包含未结束等待，按连接编号去重；并发分别累加，不等于墙上时间，不取 TOP 10 近似值。正常重启保留已结束记录，清理旧记录后其时长也随之移除；旧版未采集及异常中断丢失的等待不推算。
 

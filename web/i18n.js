@@ -413,6 +413,9 @@
  "中文 / English": "中文 / English"
 };
  Object.assign(english,{
+ "累计主动延迟": "Total server delay",
+ "只累计服务端主动等待，包含当前延迟；不包含等待客户端和心跳间隔。": "Counts deliberate server waits, including the ongoing delay. Waiting for the client and heartbeat intervals are excluded.",
+ "按累计主动延迟排序，包含当前延迟；等待客户端及心跳间隔不计入。": "Ranked by total deliberate server delay, including ongoing delays. Waiting for the client and heartbeat intervals are excluded.",
  "共 {count} 个 IP": "{count} IPs in total",
  "共 {count} 条连接": "{count} connections in total",
  "首行等待 {delay} 为基准，每次加入 ±{jitter}% 随机扰动后发送横幅。": "Wait before the first banner line. Each line uses a base delay of {delay} with ±{jitter}% random jitter.",

@@ -60,7 +60,7 @@ func DefaultConfig() Config {
 		CredentialTimeout: 20 * time.Second, IdleTimeout: 2 * time.Minute, WriteTimeout: 5 * time.Second, MaxConnectionTime: 0, ProbeCooldown: 15 * time.Minute, ProbeFailureThreshold: 3,
 		SSHKeepaliveInterval: time.Minute, SSHKeepaliveTimeout: 30 * time.Second, SSHKeepaliveCountMax: 3,
 		SingleAuthRetryThreshold: 3, SingleAuthRetryWindow: 15 * time.Minute, SingleAuthRetryCooldown: time.Hour,
-		HostKeyDirectory: "/data", ServerVersion: "SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4", LogLevel: 0}
+		HostKeyDirectory: "/data", ServerVersion: "SSH-2.0-OpenSSH_10.6p1", LogLevel: 0}
 }
 
 func (c Config) Validate() error {

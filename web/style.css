@@ -46,3 +46,4 @@ main{padding-top:24px;padding-bottom:20px}.page-intro{margin-bottom:12px}.tabs{m
 
 .trend-panel .panel-heading{flex-wrap:wrap}.trend-panel .panel-heading>div:first-child{min-width:0}.trend-panel .legend{flex-wrap:wrap}
 @media(max-width:700px){.trend-panel .panel-heading>div:first-child{flex-basis:100%}.trend-panel .panel-heading h2{overflow-wrap:normal}}
+.live-delay-metric{display:grid;gap:2px;max-width:132px;white-space:normal;text-align:right}.live-delay-label{font-size:10px;line-height:1.4;font-weight:400;color:var(--muted)}.live-delay-value{white-space:nowrap}

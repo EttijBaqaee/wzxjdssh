@@ -1,10 +1,12 @@
-# wzxjdssh 2.1.1： 编排使用文档
+# wzxjdssh 2.1.2： 编排使用文档
 
-配套文件：[compose.release.yaml](compose.release.yaml)。镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.1`，支持 Linux amd64；另提供 `latest` 标签。默认公开标识为 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`，可以通过编排环境参数修改。
+配套文件：[compose.release.yaml](compose.release.yaml)。已发布镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.2`，支持 Linux amd64；另提供 `latest` 标签。当前配套编排默认传入 `SSH-2.0-OpenSSH_10.6p1`，可以通过编排环境参数修改。
+
+2.1.2 镜像、配置文件和配套编排的默认标识统一为 `SSH-2.0-OpenSSH_10.6p1`。已有编排若显式填写了旧标识，升级时需要移除该值以沿用新默认，或将其改为 `SSH-2.0-OpenSSH_10.6p1`。这里只修改横幅字符串，不改变底层 SSH 实现。
 
 创建编排、粘贴配套 YAML，首次部署会从 GHCR 拉取镜像。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
 
-离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.1.1`、`pull_policy` 改为 `never`。
+离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.1.2`、`pull_policy` 改为 `never`。
 
 ## 端口映射
 
@@ -160,7 +162,7 @@ location /sshpanel/ {
 WZXJDSSH_SERVER_VERSION=SSH-2.0-OpenSSH_9.9
 ```
 
-留空或不设置这个参数，就使用 `SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4`。端口和标识可以同时填写：
+使用当前配套编排时，留空或不设置这个参数，就传入 `SSH-2.0-OpenSSH_10.6p1`。端口和标识可以同时填写：
 
 ```dotenv
 WZXJDSSH_PORT=22
@@ -171,7 +173,7 @@ WZXJDSSH_SERVER_VERSION=
 
 ```yaml
 environment:
-  WZXJDSSH_SERVER_VERSION: "${WZXJDSSH_SERVER_VERSION:-SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4}"
+  WZXJDSSH_SERVER_VERSION: "${WZXJDSSH_SERVER_VERSION:-SSH-2.0-OpenSSH_10.6p1}"
 ```
 
 必须填写完整的 `SSH-2.0-...` 标识，允许空格后的发行版注释，不允许换行、控制字符或非 ASCII 字符。修改后重新部署容器。此参数只影响 SSH 服务端版本标识，不改变握手算法、认证策略，也不改变 `Mode banner` 的随机文本内容。
@@ -180,7 +182,7 @@ environment:
 
 | 字段 | 当前值 | 用途 |
 | --- | --- | --- |
-| image | ghcr.io/ettijbaqaee/wzxjdssh:2.1.1 | 固定 GHCR 镜像版本 |
+| image | ghcr.io/ettijbaqaee/wzxjdssh:2.1.2 | 固定 GHCR 镜像版本 |
 | pull_policy | missing | 本地没有镜像时从 GHCR 拉取 |
 | container_name | wzxjdssh | 固定容器名；同一宿主机部署多份时需分别命名或移除此字段 |
 | restart | unless-stopped | 自动恢复容器；手动停止后保持停止 |
@@ -212,7 +214,7 @@ environment:
 
 若改用宿主机目录挂载 `/data`，该目录需允许容器 UID/GID `65532:65532` 读写。命名卷由 Docker 使用镜像内目录的属主和权限初始化。
 
-升级 2.1.1：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
+升级 2.1.2：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
 
 ## 自定义配置
 
@@ -224,7 +226,7 @@ environment:
 
 ```yaml
 environment:
-  WZXJDSSH_SERVER_VERSION: "${WZXJDSSH_SERVER_VERSION:-SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4}"
+  WZXJDSSH_SERVER_VERSION: "${WZXJDSSH_SERVER_VERSION:-SSH-2.0-OpenSSH_10.6p1}"
   WZXJDSSH_CONFIG: /etc/wzxjdssh-custom/wzxjdssh.conf
 volumes:
   - hostkeys:/data
@@ -233,7 +235,7 @@ volumes:
 
 此处 `volumes` 和 `environment` 均与原服务中的同名键合并，不要重复声明。配置文件名为 `wzxjdssh.conf`，时间单位为毫秒，例如 `Delay 10000` 表示每次认证等待 10 秒。
 
-非空 `WZXJDSSH_SERVER_VERSION` 优先于文件中的 `ServerVersion`。使用配套编排时，留空的编排参数会展开为 Debian 默认值；要使用自定义配置文件里的其他标识，需要同步设置编排参数，或移除服务 `environment` 中的 `WZXJDSSH_SERVER_VERSION`。
+非空 `WZXJDSSH_SERVER_VERSION` 优先于文件中的 `ServerVersion`。使用当前配套编排时，留空的编排参数会展开为 `SSH-2.0-OpenSSH_10.6p1`；要使用自定义配置文件里的其他标识，需要同步设置编排参数，或移除服务 `environment` 中的 `WZXJDSSH_SERVER_VERSION`。
 
 程序默认参数为：`Port 2222`、`Delay 10000`、`MaxLineLength 32`（允许 3–255，含 CRLF）、`MaxClients 4096`（允许 1–2147483647）、`LogLevel 0`、`BindFamily 0`。自动地址族在系统支持时使用 IPv6 双栈覆盖 IPv4，实际行为取决于系统。`Mode banner` 的首行也等待 Delay；`Mode ssh` 先完成真实 SSH 握手，再按 Delay 延迟认证失败响应。
 
@@ -304,7 +306,7 @@ volumes:
 
 默认下载源为 [PBH-BTN/GeoLite.mmdb](https://github.com/PBH-BTN/GeoLite.mmdb/releases)，数据来自 MaxMind GeoLite2 与 ljxi/GeoCN。首次下载未完成时明确显示“归属数据库尚未就绪”，不阻塞 SSH；可离线将三库分别以 `GeoLite2-City.mmdb`、`GeoLite2-ASN.mmdb`、`GeoCN.mmdb` 放入 `ipdb/` 并关闭自动更新。
 
-已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.1` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。
+已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.1.2` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。
 
 ### 2.0.6 仿真响应核验
 
@@ -319,6 +321,10 @@ volumes:
 
 由服务端向 GitHub 官方 API 查询，成功结果缓存 1 小时、失败后自动检查间隔 10 分钟，手动检查至少间隔 30 秒。每次最多一个请求，超时 8 秒，支持 ETag；检查失败保留上次有效结果并显示原因。只比较正式版本，草稿和预发布版不提示，自动检查不延长管理员闲置会话。无需新增编排参数，更新镜像并保留原数据卷即可。
 
-## 2.1.1 后台语言与主题
+## 2.1.2 后台语言与主题
 
 首次跟随浏览器首选语言，支持中文和英文，登录页及后台均可通过 English / 中文 按钮切换并记住选择。明暗主题切换采用柔和颜色过渡，尊重减少动态效果偏好。无需新增编排参数，更新镜像版本并保留现有挂载即可。英文项目介绍见 [README.en.md](README.en.md)。
+
+## 2.1.2 实时连接时长标签
+
+实时榜单青色时长增加“累计主动延迟”标签；只统计服务端主动等待，包含当前延迟，等待客户端和心跳间隔不计入。统计口径及排序保持不变。升级只需修改镜像版本并保留原数据挂载，无需增加编排参数。

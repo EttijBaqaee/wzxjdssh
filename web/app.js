@@ -123,7 +123,10 @@ function renderLive(live){
     if(item.simulated)meta.append(el('span',t(' · 仿真已确认 ')+liveDuration(item.verified_post_auth_ms)+t(' · 待核验 ')+liveDuration(item.unverified_post_auth_ms)));
     info.append(source,geoNode(item.ip),meta);
     if(item.connection_id){const button=el('button','#'+item.connection_id+t(' · 详情'),'quiet live-detail');button.addEventListener('click',()=>detail(item.connection_id));info.append(button);}
-    row.append(el('span',String(index+1).padStart(2,'0'),'rank-number'),info,el('span',liveDuration(item.delayed_ms),'rank-count'));delays.append(row);
+    const metric=el('div',undefined,'rank-count live-delay-metric');
+    metric.title=t('只累计服务端主动等待，包含当前延迟；不包含等待客户端和心跳间隔。');
+    metric.append(el('span',t('累计主动延迟'),'live-delay-label'),el('span',liveDuration(item.delayed_ms),'live-delay-value'));
+    row.append(el('span',String(index+1).padStart(2,'0'),'rank-number'),info,metric);delays.append(row);
   });
   const concurrency=$('rank-concurrency');concurrency.replaceChildren();
   if(!live.ip_concurrency.length)concurrency.append(el('li',t('暂无在线连接'),'empty'));

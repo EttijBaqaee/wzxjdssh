@@ -53,6 +53,7 @@ func connectionInsert(ref string) string {
 	return totalChange("connections", "1") + totalChange("active", ref+".ended_at IS NULL") +
 		totalChange("rejected", ref+".status='rejected'") + totalChange("probe_blocked", ref+".status='probe_blocked'") +
 		totalChange("delayed_ms", "MAX(0,"+ref+".delayed_ms)") +
+		totalChange("bytes_sent", "MAX(0,"+ref+".bytes_sent)") + totalChange("bytes_received", "MAX(0,"+ref+".bytes_received)") +
 		dayChange(ref, "started_at", "connections", 1) +
 		groupChange("clients", ref+".client_version", "''", ref+".client_version<>''", 1) +
 		`INSERT INTO analytics_ips(ip,connections,active,attempts,first_seen,last_seen,latest_id,longest_ms,longest_id,delayed_ms,max_delayed_ms)
@@ -69,6 +70,7 @@ func connectionDelete(ref string) string {
 	return totalChange("connections", "-1") + totalChange("active", "-("+ref+".ended_at IS NULL)") +
 		totalChange("rejected", "-("+ref+".status='rejected')") + totalChange("probe_blocked", "-("+ref+".status='probe_blocked')") +
 		totalChange("delayed_ms", "-MAX(0,"+ref+".delayed_ms)") +
+		totalChange("bytes_sent", "-MAX(0,"+ref+".bytes_sent)") + totalChange("bytes_received", "-MAX(0,"+ref+".bytes_received)") +
 		dayChange(ref, "started_at", "connections", -1) +
 		groupChange("clients", ref+".client_version", "''", ref+".client_version<>''", -1) +
 		`UPDATE analytics_ips SET connections=connections-1,active=active-(` + ref + `.ended_at IS NULL),attempts=attempts-` + ref + `.auth_attempts,delayed_ms=delayed_ms-MAX(0,` + ref + `.delayed_ms) WHERE ip=` + ref + `.ip;
@@ -103,8 +105,10 @@ func (s *Store) initAnalytics() error {
 		return err
 	}
 	if version >= 4 {
-		_, err := s.db.Exec(statusCoverIndex)
-		return err
+		if _, err := s.db.Exec(statusCoverIndex); err != nil {
+			return err
+		}
+		return s.initTrafficAnalytics()
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -163,7 +167,10 @@ func (s *Store) initAnalytics() error {
 	if _, err = tx.Exec(`PRAGMA user_version=4`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return s.initTrafficAnalytics()
 }
 
 func analyticsTriggers() map[string]string {
@@ -171,11 +178,13 @@ func analyticsTriggers() map[string]string {
 		"connections_ai":   "AFTER INSERT ON connections BEGIN\n" + connectionInsert("NEW") + "END",
 		"connections_ad":   "AFTER DELETE ON connections BEGIN\n" + connectionDelete("OLD") + "END",
 		"connections_move": "AFTER UPDATE OF ip,started_at ON connections WHEN NEW.ip<>OLD.ip OR NEW.started_at<>OLD.started_at BEGIN\n" + connectionDelete("OLD") + connectionInsert("NEW") + "END",
-		"connections_au": `AFTER UPDATE OF status,ended_at,auth_attempts,duration_ms,delayed_ms,client_version ON connections WHEN NEW.ip=OLD.ip AND NEW.started_at=OLD.started_at BEGIN
+		"connections_au": `AFTER UPDATE OF status,ended_at,auth_attempts,duration_ms,delayed_ms,client_version,bytes_sent,bytes_received ON connections WHEN NEW.ip=OLD.ip AND NEW.started_at=OLD.started_at BEGIN
  ` + totalChange("active", "(NEW.ended_at IS NULL)-(OLD.ended_at IS NULL)") +
 			totalChange("rejected", "(NEW.status='rejected')-(OLD.status='rejected')") +
 			totalChange("probe_blocked", "(NEW.status='probe_blocked')-(OLD.status='probe_blocked')") +
 			totalChange("delayed_ms", "MAX(0,NEW.delayed_ms)-MAX(0,OLD.delayed_ms)") +
+			totalChange("bytes_sent", "MAX(0,NEW.bytes_sent)-MAX(0,OLD.bytes_sent)") +
+			totalChange("bytes_received", "MAX(0,NEW.bytes_received)-MAX(0,OLD.bytes_received)") +
 			`UPDATE analytics_ips SET active=active+(NEW.ended_at IS NULL)-(OLD.ended_at IS NULL),attempts=attempts+NEW.auth_attempts-OLD.auth_attempts,delayed_ms=delayed_ms+MAX(0,NEW.delayed_ms)-MAX(0,OLD.delayed_ms) WHERE ip=NEW.ip AND (NEW.ended_at IS NOT OLD.ended_at OR NEW.auth_attempts<>OLD.auth_attempts OR NEW.delayed_ms<>OLD.delayed_ms);
  UPDATE analytics_ips SET longest_ms=(SELECT MAX(0,duration_ms) FROM connections WHERE ip=NEW.ip ORDER BY duration_ms DESC,id DESC LIMIT 1),longest_id=(SELECT id FROM connections WHERE ip=NEW.ip ORDER BY duration_ms DESC,id DESC LIMIT 1) WHERE ip=NEW.ip AND NEW.duration_ms<>OLD.duration_ms;
  UPDATE analytics_ips SET max_delayed_ms=(SELECT MAX(0,delayed_ms) FROM connections WHERE ip=NEW.ip ORDER BY delayed_ms DESC,id DESC LIMIT 1) WHERE ip=NEW.ip AND NEW.delayed_ms<>OLD.delayed_ms;

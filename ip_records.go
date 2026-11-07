@@ -37,6 +37,8 @@ type IPDelay struct {
 }
 
 type liveDelay struct {
+	BytesSent          int64 `json:"bytes_sent"`
+	BytesReceived      int64 `json:"bytes_received"`
 	VerifiedPostAuthMS int64 `json:"verified_post_auth_ms"`
 	ID                 int64 `json:"id"`
 	DelayedMS          int64 `json:"delayed_ms"`

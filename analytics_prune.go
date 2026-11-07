@@ -82,6 +82,8 @@ func (s *Store) pruneClosedBatch(byteLimit int64) (uint64, error) {
 		{"rejected", `SELECT COUNT(*) FROM wzx_prune_ids p CROSS JOIN connections c ON c.id=p.id WHERE status='rejected'`},
 		{"probe_blocked", `SELECT COUNT(*) FROM wzx_prune_ids p CROSS JOIN connections c ON c.id=p.id WHERE status='probe_blocked'`},
 		{"delayed_ms", `SELECT COALESCE(SUM(MAX(0,delayed_ms)),0) FROM wzx_prune_ids p CROSS JOIN connections c ON c.id=p.id`},
+		{"bytes_sent", `SELECT COALESCE(SUM(MAX(0,bytes_sent)),0) FROM wzx_prune_ids p CROSS JOIN connections c ON c.id=p.id`},
+		{"bytes_received", `SELECT COALESCE(SUM(MAX(0,bytes_received)),0) FROM wzx_prune_ids p CROSS JOIN connections c ON c.id=p.id`},
 		{"attempts", `SELECT COUNT(*) FROM wzx_prune_ids p CROSS JOIN auth_attempts a ON a.connection_id=p.id`},
 		{"auth_rejected", `SELECT COUNT(*) FROM wzx_prune_ids p CROSS JOIN auth_attempts a ON a.connection_id=p.id WHERE result='rejected'`},
 		{"verified_ms", `SELECT COALESCE(SUM(` + verifiedExpression("t") + `),0) FROM wzx_prune_ids p CROSS JOIN simulated_sessions t ON t.connection_id=p.id`},

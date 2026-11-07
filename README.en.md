@@ -6,7 +6,7 @@
 
 A Docker-deployed SSH honeypot with real SSHv2 negotiation, delayed authentication rejection, isolated simulated sessions, SQLite records and a web console.
 
-Current release: **2.2.0**. Image: `ghcr.io/ettijbaqaee/wzxjdssh:2.2.0` for Linux amd64. The `latest` tag is also available.
+Current release: **2.3.0**. Image: `ghcr.io/ettijbaqaee/wzxjdssh:2.3.0` for Linux amd64. The `latest` tag is also available.
 
 The default SSH identification is `SSH-2.0-OpenSSH_10.6p1`, the version before the [OpenSSH 10.6p2 security fix](https://www.openssh.com/txt/release-10.6p2), without a Debian suffix. Only the advertised identification changes; the underlying implementation remains Go SSH. A non-empty `WZXJDSSH_SERVER_VERSION` overrides the default.
 
@@ -19,6 +19,12 @@ The sign-in page and console support Chinese and English. On first visit, the br
 Navigation, statistics, connection details, settings, warnings, version notices, dates and numbers follow the selected language. Submitted usernames, passwords, public keys and SSH client identifications remain unchanged. Location names and protocol identifiers retain their original database or protocol values.
 
 Light and dark appearance follows the browser until manually changed. Theme changes use a short, gentle color transition without moving page elements. Browsers requesting reduced motion switch immediately.
+
+## Traffic and trend statistics
+
+The overview shows total SSH bytes sent and received by the server across retained history and live connections. A red thick underline marks sent traffic when it is larger; a green underline marks received traffic when it is larger. Equal totals have no colored underline. Deleting history or clearing the database also removes its traffic from the totals.
+
+Hover over the trend chart, tap it on a touchscreen, or use the keyboard to see the UTC date and actual connection and authentication counts. The selected date is retained across refreshes and window resizing.
 
 ## How it works
 
@@ -123,7 +129,9 @@ After sign-in, the console checks the latest stable GitHub release. A newer vers
 
 Checks have an 8-second timeout and one request in flight, use ETag and cache successful results for one hour. Automatic retries after failure wait ten minutes; manual checks are limited to one every 30 seconds. Failures preserve the last valid result and display a reason. Draft and prerelease versions are excluded.
 
-To upgrade to **2.2.0**, pull `ghcr.io/ettijbaqaee/wzxjdssh:2.2.0`, change the original Compose image tag, and recreate the service while keeping its data volumes and project name. No new environment variables are needed for language or theme controls. The existing host-network, port 22, web port 2223 and reverse-proxy path settings remain compatible.
+To upgrade to **2.3.0**, pull `ghcr.io/ettijbaqaee/wzxjdssh:2.3.0`, change the original Compose image tag, and recreate the service while keeping its data volumes and project name. No new environment variables are needed for language or theme controls. The existing host-network, port 22, web port 2223 and reverse-proxy path settings remain compatible.
+
+Upgrading from 2.2.0 requires no new Compose parameters and keeps SQLite schema version 4. The first startup backfills traffic summaries; subsequent startups use the maintained summaries. This release changes the project license to AGPLv3; see [LICENSE](LICENSE).
 
 Release assets include the runtime image, runtime source and deployment documentation. See [CHANGELOG.md](CHANGELOG.md) for release changes.
 
@@ -131,4 +139,6 @@ Version 2.2.0 upgrades the SQLite schema to version 4 and maintains transactiona
 
 ## License
 
-[MIT](LICENSE). Third-party dependencies retain their own licenses; see [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
+Copyright (c) 2026 EttijBaqaee.
+
+This project is licensed under the [GNU AGPLv3](LICENSE), version 3 only (`AGPL-3.0-only`). Third-party dependencies retain their own licenses; see [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).

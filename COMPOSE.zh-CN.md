@@ -1,12 +1,12 @@
-# wzxjdssh 2.2.0： 编排使用文档
+# wzxjdssh 2.3.0： 编排使用文档
 
-配套文件：[compose.release.yaml](compose.release.yaml)。已发布镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.2.0`，支持 Linux amd64；另提供 `latest` 标签。当前配套编排默认传入 `SSH-2.0-OpenSSH_10.6p1`，可以通过编排环境参数修改。
+配套文件：[compose.release.yaml](compose.release.yaml)。已发布镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.3.0`，支持 Linux amd64；另提供 `latest` 标签。当前配套编排默认传入 `SSH-2.0-OpenSSH_10.6p1`，可以通过编排环境参数修改。
 
 2.2.0 镜像、配置文件和配套编排的默认标识统一为 `SSH-2.0-OpenSSH_10.6p1`。已有编排若显式填写了旧标识，升级时需要移除该值以沿用新默认，或将其改为 `SSH-2.0-OpenSSH_10.6p1`。这里只修改横幅字符串，不改变底层 SSH 实现。
 
 创建编排、粘贴配套 YAML，首次部署会从 GHCR 拉取镜像。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
 
-离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.2.0`、`pull_policy` 改为 `never`。
+离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.3.0`、`pull_policy` 改为 `never`。
 
 ## 端口映射
 
@@ -186,7 +186,7 @@ environment:
 
 | 字段 | 当前值 | 用途 |
 | --- | --- | --- |
-| image | ghcr.io/ettijbaqaee/wzxjdssh:2.2.0 | 固定 GHCR 镜像版本 |
+| image | ghcr.io/ettijbaqaee/wzxjdssh:2.3.0 | 固定 GHCR 镜像版本 |
 | pull_policy | missing | 本地没有镜像时从 GHCR 拉取 |
 | container_name | wzxjdssh | 固定容器名；同一宿主机部署多份时需分别命名或移除此字段 |
 | restart | unless-stopped | 自动恢复容器；手动停止后保持停止 |
@@ -218,7 +218,9 @@ environment:
 
 若改用宿主机目录挂载 `/data`，该目录需允许容器 UID/GID `65532:65532` 读写。命名卷由 Docker 使用镜像内目录的属主和权限初始化。
 
-升级 2.2.0：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
+升级 2.3.0：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
+
+2.2.0 升级至 2.3.0 无需新增编排参数，SQLite 结构版本仍为 4；首次启动自动补齐收发汇总。总发送 / 总接收随历史删除、容量清理和清库同步变化。趋势图支持悬停、触屏和键盘查看实际数值。本版采用 AGPLv3，见 [LICENSE](LICENSE)。
 
 ## 自定义配置
 
@@ -310,7 +312,7 @@ volumes:
 
 默认下载源为 [PBH-BTN/GeoLite.mmdb](https://github.com/PBH-BTN/GeoLite.mmdb/releases)，数据来自 MaxMind GeoLite2 与 ljxi/GeoCN。首次下载未完成时明确显示“归属数据库尚未就绪”，不阻塞 SSH；可离线将三库分别以 `GeoLite2-City.mmdb`、`GeoLite2-ASN.mmdb`、`GeoCN.mmdb` 放入 `ipdb/` 并关闭自动更新。
 
-已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.2.0` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。
+已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.3.0` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。
 
 ### 2.0.6 仿真响应核验
 

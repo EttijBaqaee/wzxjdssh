@@ -8,9 +8,9 @@
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后先进行自适应随机等待，再收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
 
-当前版本：**2.2.0**
+当前版本：**2.3.0**
 
-镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.2.0`（Linux amd64），同时提供 `latest` 标签。
+镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.3.0`（Linux amd64），同时提供 `latest` 标签。
 
 默认 SSH 标识为 `SSH-2.0-OpenSSH_10.6p1`，对应 [OpenSSH 10.6p2 安全修复](https://www.openssh.com/txt/release-10.6p2)前的版本，不带 Debian 后缀；仅改变对外标识，底层仍使用 Go SSH 实现。非空 `WZXJDSSH_SERVER_VERSION` 可覆盖默认标识。
 
@@ -51,6 +51,8 @@
 - 内置 SQLite，记录连接状态、来源、时间、时长、客户端标识和认证尝试，默认保留 90 天。
 - 记录用户名、密码、keyboard-interactive 回答，以及客户端提交的公钥正文和 SHA256 指纹；SSH 不传输客户端私钥，公钥探测也不证明持有对应私钥。
 - 内置中英文 Web UI：统计概览、最近 30 天趋势、来源/用户名/认证方式排行、连接筛选和详情。
+- 统计概览显示总发送 / 总接收，合计当前保留历史与在线连接的服务端 SSH 流量；发送较多时显示红色粗下划线，接收较多时显示绿色粗下划线，相等时不显示彩色下划线。
+- 趋势图支持鼠标悬停、触屏点击及键盘选择，展示 UTC 日期、实际连接数与认证次数；刷新和调整窗口后保留已选日期。
 - 密码 TOP 10、单 IP 最长连接持续时间 TOP 10；最长连接持续时间与累计实际拖延分别显示。
 - 连接记录按 IP 汇总，展开后保留每次连接、来源端口与认证详情；主表和展开表均支持最新一页、最旧一页。
 - 可选数据库容量上限；超过后按最旧连接清理认证记录并回收 SQLite 文件空间，留空或 0 时不启用容量清理。
@@ -65,12 +67,12 @@
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.2.0`，无需自行构建。
+1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.3.0`，无需自行构建。
 2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`；缺少镜像时会自动拉取。
 3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
-编排使用 `pull_policy: missing`，固定到 `2.2.0` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.2.0`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像。
+编排使用 `pull_policy: missing`，固定到 `2.3.0` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.3.0`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像。
 
 ### 常用编排参数
 
@@ -131,7 +133,9 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 
 同 IP 并发标记在最后一条连接断开后默认闲置 1 小时冷却，期间重连重新计时；历史连接标签保留。
 
-升级至 2.2.0 时，拉取新镜像并将编排标签改为 `2.2.0`，重建容器，保留数据卷。
+升级至 2.3.0 时，拉取新镜像并将编排标签改为 `2.3.0`，重建容器，保留数据卷。
+
+从 2.2.0 升级无需新增编排参数，SQLite 结构版本仍为 4；首次启动自动补齐收发汇总，后续启动直接读取已维护的汇总。历史删除、容量清理及清库会同步扣减流量。本版项目许可为 AGPLv3，详见 [LICENSE](LICENSE)。
 
 2.0.6 的无凭据探针按单条连接处理，默认提交期限为 20 秒；提前断开也只记录当前连接，不累计 IP 探针次数、不创建 IP 冷却。同 IP 已提交凭据的其他连接继续正常策略。升级前已存在的 IP 探针标签仅兼容至原到期时间，不续期。
 
@@ -267,4 +271,6 @@ Web 管理会话默认闲置 1 小时自动退出，可在“管理设置”修�
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE)。第三方依赖遵循各自许可证，见 [第三方许可声明](THIRD-PARTY-NOTICES.txt)。
+Copyright (c) 2026 EttijBaqaee。
+
+本项目采用 [GNU AGPLv3](LICENSE)（`AGPL-3.0-only`，仅第 3 版）。第三方依赖遵循各自许可证，见 [第三方许可声明](THIRD-PARTY-NOTICES.txt)。

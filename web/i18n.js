@@ -460,6 +460,14 @@
   "服务正在关闭，横幅未修改": "The service is shutting down. The banner was not changed."
 });
  Object.assign(english,{"修改横幅": "Change banner", "确认修改 SSH 横幅": "Confirm SSH banner change", "将使用的横幅": "New banner", "修改后仅对新 SSH 连接生效，现有连接保持不变。": "Only new SSH connections use the changed banner. Existing connections remain unchanged."});
+ Object.assign(english,{
+  "你的 IP：":"Your IP: ","ASN 暂不可用":"ASN unavailable",
+  "正在双路校验…":"Cross-checking…","双路一致":"Both sources agree",
+  "两路 IP 不一致":"IP sources differ","单路识别 · 访问者接口不可用":"Single source · visitor endpoint unavailable",
+  "单路识别":"Single source","直接连接":"Direct connection","可信反代":"Trusted proxy","不可用":"Unavailable",
+  "访问者接口：":"Visitor endpoint: ","第二路来源：":"Second source: ","来访者 IP 暂不可用":"Visitor IP unavailable",
+  "校验仅比较两路观测地址，不作为身份认证。":"This compares two observed addresses; it does not authenticate identity."
+ });
  function t(value,params){
   if(typeof value!=='string')return value;
   const translated=language==='en'?english[value.trim()]:undefined;

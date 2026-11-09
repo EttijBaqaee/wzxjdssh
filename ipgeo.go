@@ -78,6 +78,9 @@ func geoConfig(databasePath string, lookup func(string) string) (GeoConfig, erro
 			c.URLs[i] = []string{v}
 		} else {
 			c.URLs[i] = []string{"https://raw.githubusercontent.com/PBH-BTN/GeoLite.mmdb/download/" + geoNames[i] + ".mmdb.gz", "https://github.com/PBH-BTN/GeoLite.mmdb/releases/latest/download/" + geoNames[i] + ".mmdb.gz"}
+			if i == 2 {
+				c.URLs[i] = append([]string{"https://github.com/ljxi/GeoCN/releases/latest/download/GeoCN.mmdb"}, c.URLs[i]...)
+			}
 		}
 	}
 	return c, nil

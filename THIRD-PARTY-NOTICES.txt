@@ -3521,4 +3521,4 @@ THE SOFTWARE.
 
 Administrative divisions: xiangyuecn/AreaCity-JsSpider-StatsGov, MIT. See geodata/cn-divisions-LICENSE.txt.
 
-Optional downloaded databases (not bundled in the image): GeoLite2 City/ASN by MaxMind (https://www.maxmind.com, GeoLite EULA and CC BY-SA 4.0 attribution as applicable); GeoCN by ljxi/GeoCN. Distribution source: https://github.com/PBH-BTN/GeoLite.mmdb. Accuracy and update availability depend on upstream data. This project does not copy PeerBanHelper implementation code.
+Optional downloaded databases (not bundled in the image): GeoLite2 City/ASN by MaxMind (https://www.maxmind.com, GeoLite EULA and CC BY-SA 4.0 attribution as applicable), distributed via https://github.com/PBH-BTN/GeoLite.mmdb; GeoCN downloads from its upstream https://github.com/ljxi/GeoCN first, with PBH-BTN/GeoLite.mmdb as fallback. Accuracy and update availability depend on upstream data. This project does not copy PeerBanHelper implementation code.

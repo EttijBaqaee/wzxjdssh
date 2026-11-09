@@ -9,11 +9,11 @@ FROM dependencies AS source
 COPY . .
 
 FROM source AS builder
-ARG VERSION=2.3.0
+ARG VERSION=2.3.1
 RUN --mount=type=cache,target=/root/.cache/go-build go mod verify && CGO_ENABLED=0 go build -mod=readonly -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /wzxjdssh . && mkdir -m 0700 /empty-data
 
 FROM scratch AS runtime
-ARG VERSION=2.3.0
+ARG VERSION=2.3.1
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.revision="${VCS_REF}"
 LABEL org.opencontainers.image.title="wzxjdssh" org.opencontainers.image.version="${VERSION}" org.opencontainers.image.licenses="AGPL-3.0-only" org.opencontainers.image.source="https://github.com/EttijBaqaee/wzxjdssh" org.opencontainers.image.description="SSH transport honeypot with delayed authentication, SQLite records and Web UI"

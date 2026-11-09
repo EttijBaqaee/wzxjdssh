@@ -231,6 +231,7 @@ func (w *Web) Handler() http.Handler {
 	mux.HandleFunc("POST /api/version/check", w.protected(w.releaseCheck))
 	mux.HandleFunc("POST /api/emergency", w.protected(w.emergencyAction))
 	mux.HandleFunc("GET /api/ipdb", w.protected(w.geoState))
+	mux.HandleFunc("GET /api/visitor", w.protected(w.visitor))
 	mux.HandleFunc("POST /api/ipdb/update", w.protected(w.geoUpdate))
 	mux.HandleFunc("GET /api/database/clear", w.protected(w.databaseClearState))
 	mux.HandleFunc("POST /api/database/clear", w.protected(w.databaseClearAction))
@@ -257,7 +258,7 @@ func (w *Web) Handler() http.Handler {
 		rw.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		rw.Write(data)
 	})
-	for _, name := range []string{"geo.js", "admin.js", "releases.js", "i18n.js"} {
+	for _, name := range []string{"geo.js", "admin.js", "releases.js", "i18n.js", "visitor.js"} {
 		mux.HandleFunc("GET /"+name, func(rw http.ResponseWriter, r *http.Request) {
 			data, _ := fs.ReadFile(files, name)
 			rw.Header().Set("Content-Type", "application/javascript; charset=utf-8")
@@ -289,12 +290,16 @@ func (w *Web) Handler() http.Handler {
 			http.StripPrefix(base, mux).ServeHTTP(rw, r)
 		})
 	}
+	connectSources := "'self'"
+	if origin, err := visitorEndpointOrigin(w.cfg.VisitorIPURL); err == nil && origin != "" {
+		connectSources += " " + origin
+	}
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("X-Session-Idle-Seconds", strconv.Itoa(int(w.idleTimeout().Seconds())))
 		rw.Header().Set("Cache-Control", "no-store")
 		rw.Header().Set("X-Content-Type-Options", "nosniff")
 		rw.Header().Set("Referrer-Policy", "no-referrer")
-		rw.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		rw.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src "+connectSources+"; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		if r.Method == http.MethodPost {
 			if origin := r.Header.Get("Origin"); origin != "" {
 				u, err := url.Parse(origin)

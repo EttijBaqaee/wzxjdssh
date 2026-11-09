@@ -4,26 +4,32 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
 )
 
 type RuntimeConfig struct {
-	Geo           GeoConfig
-	DatabasePath  string
-	RetentionDays int
-	DatabaseMaxMB int64
-	WebEnabled    bool
-	WebListen     string
-	WebBasePath   string
-	AdminUsername string
-	AdminPassword string
-	SecureCookie  bool
+	Geo            GeoConfig
+	DatabasePath   string
+	RetentionDays  int
+	DatabaseMaxMB  int64
+	WebEnabled     bool
+	WebListen      string
+	WebBasePath    string
+	AdminUsername  string
+	AdminPassword  string
+	SecureCookie   bool
+	VisitorIPURL   string
+	TrustedProxies []netip.Prefix
 }
 
 func runtimeConfig() (RuntimeConfig, error) {
 	c := RuntimeConfig{DatabasePath: "/var/lib/wzxjdssh/records.sqlite", RetentionDays: 90, WebEnabled: true, WebListen: ":2223", WebBasePath: "", AdminUsername: "admin"}
+	if err := c.configureVisitor(os.Getenv); err != nil {
+		return c, err
+	}
 	for name, dst := range map[string]*string{"WZXJDSSH_DATABASE_PATH": &c.DatabasePath, "WZXJDSSH_WEB_LISTEN": &c.WebListen, "WZXJDSSH_ADMIN_PASSWORD": &c.AdminPassword} {
 		if v, ok := os.LookupEnv(name); ok {
 			*dst = v

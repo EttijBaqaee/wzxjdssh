@@ -8,13 +8,19 @@
 
 默认完成版本交换、密钥交换、服务器签名和加密传输，再让认证请求等待后失败。认证延迟期间由对端主动断开的来源会被标记 1 小时；同一 IP 和客户端标识在冷却期间重连时，提交认证后先进行自适应随机等待，再收到成功消息，随后进入响应随机迟滞的隔离会话，模拟网络时快时慢和偶发停顿。不执行系统命令，也不提供真实 Shell、SFTP 或端口转发。
 
-当前版本：**2.3.0**
+当前版本：**2.3.1**
 
-镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.3.0`（Linux amd64），同时提供 `latest` 标签。
+镜像：`ghcr.io/ettijbaqaee/wzxjdssh:2.3.1`（Linux amd64），同时提供 `latest` 标签。
 
 默认 SSH 标识为 `SSH-2.0-OpenSSH_10.6p1`，对应 [OpenSSH 10.6p2 安全修复](https://www.openssh.com/txt/release-10.6p2)前的版本，不带 Debian 后缀；仅改变对外标识，底层仍使用 Go SSH 实现。非空 `WZXJDSSH_SERVER_VERSION` 可覆盖默认标识。
 
 管理设置在“清理数据库”上方显示当前 SSH 横幅，支持输入管理员密码后即时修改。输入框固定 `SSH-2.0-` 前缀，只填写后面的版本和备注；完整标识最多 253 字节，仅允许可打印 ASCII。修改立即用于新 SSH 连接，已建立连接不受影响。网页修改只在当前进程生效，不写入 SQLite 或修改编排；重启或重新加载配置后，仍按现有编排和配置文件的优先级读取。
+
+## 管理页面演示
+
+[![管理页面：暗黑主题、来访者 IP 与 ASN](docs/images/admin-console.png)](docs/images/admin-console.png)
+
+图中为示例地址与归属数据。点击可查看原图。
 
 ## 后台语言与主题
 
@@ -51,6 +57,7 @@
 - 内置 SQLite，记录连接状态、来源、时间、时长、客户端标识和认证尝试，默认保留 90 天。
 - 记录用户名、密码、keyboard-interactive 回答，以及客户端提交的公钥正文和 SHA256 指纹；SSH 不传输客户端私钥，公钥探测也不证明持有对应私钥。
 - 内置中英文 Web UI：统计概览、最近 30 天趋势、来源/用户名/认证方式排行、连接筛选和详情。
+- 页头显示来访者 IPv4/IPv6、归属地、ASN 与组织；浏览器访问者接口与可信反代或直接连接来源交叉比较，两路不一致时并列显示。接口地址和可信代理可在编排中设置，见[编排文档](COMPOSE.zh-CN.md#来访者-ip-与双路校验)。
 - 统计概览显示总发送 / 总接收，合计当前保留历史与在线连接的服务端 SSH 流量；发送较多时显示红色粗下划线，接收较多时显示绿色粗下划线，相等时不显示彩色下划线。
 - 趋势图支持鼠标悬停、触屏点击及键盘选择，展示 UTC 日期、实际连接数与认证次数；刷新和调整窗口后保留已选日期。
 - 密码 TOP 10、单 IP 最长连接持续时间 TOP 10；最长连接持续时间与累计实际拖延分别显示。
@@ -67,12 +74,12 @@
 
 配套文件：[compose.release.yaml](compose.release.yaml)、[环境参数示例](.env.example)、[完整编排文档](COMPOSE.zh-CN.md)。
 
-1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.3.0`，无需自行构建。
+1. 使用 GitHub Container Registry 镜像 `ghcr.io/ettijbaqaee/wzxjdssh:2.3.1`，无需自行构建。
 2. 在“容器 → 编排”创建编排，粘贴 `compose.release.yaml`；缺少镜像时会自动拉取。
 3. 在编排环境参数区设置至少 12 字节的 `WZXJDSSH_ADMIN_PASSWORD`，其他参数可使用默认值。
 4. 启动后确认容器健康状态。从指定端口连接时，应能完成 SSH 握手，认证随后被延迟拒绝。
 
-编排使用 `pull_policy: missing`，固定到 `2.3.0` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.3.0`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像。
+编排使用 `pull_policy: missing`，固定到 `2.3.1` 版本。离线部署可从 GitHub Release 下载镜像归档并在 1Panel 导入，随后将编排中的 `image` 改为 `wzxjdssh:2.3.1`、`pull_policy` 改为 `never`。也可在 1Panel 构建本仓库的 `Dockerfile`，最终阶段为正式镜像。
 
 ### 常用编排参数
 
@@ -133,9 +140,9 @@ WZXJDSSH_ADMIN_PASSWORD=replace-with-your-own-long-password
 
 同 IP 并发标记在最后一条连接断开后默认闲置 1 小时冷却，期间重连重新计时；历史连接标签保留。
 
-升级至 2.3.0 时，拉取新镜像并将编排标签改为 `2.3.0`，重建容器，保留数据卷。
+升级至 2.3.1 时，拉取新镜像并将编排标签改为 `2.3.1`，重建容器，保留数据卷。
 
-从 2.2.0 升级无需新增编排参数，SQLite 结构版本仍为 4；首次启动自动补齐收发汇总，后续启动直接读取已维护的汇总。历史删除、容量清理及清库会同步扣减流量。本版项目许可为 AGPLv3，详见 [LICENSE](LICENSE)。
+从 2.3.0 升级，SQLite 结构版本仍为 4，数据卷和既有 SSH 策略保持兼容。来访者显示可使用默认接口；自定义接口或反代地址时设置 `WZXJDSSH_VISITOR_IP_URL` 与 `WZXJDSSH_TRUSTED_PROXIES`。从 2.2.0 升级时首次启动自动补齐收发汇总。历史删除、容量清理及清库会同步扣减流量。本版项目许可为 AGPLv3，详见 [LICENSE](LICENSE)。
 
 2.0.6 的无凭据探针按单条连接处理，默认提交期限为 20 秒；提前断开也只记录当前连接，不累计 IP 探针次数、不创建 IP 冷却。同 IP 已提交凭据的其他连接继续正常策略。升级前已存在的 IP 探针标签仅兼容至原到期时间，不续期。
 
@@ -210,7 +217,7 @@ Web 管理会话默认闲置 1 小时自动退出，可在“管理设置”修�
 | `WZXJDSSH_COOLDOWN_AUTH_DELAY_STEP_MS` | `1000` | 每次学习调整量，1–60000 毫秒 |
 | `WZXJDSSH_COOLDOWN_AUTH_JITTER_PERCENT` | `10` | 随机扰动比例，0–50；最终仍钳在上下限 |
 
-观测页按认证尝试、拖延统计、来源情况分组；用户名、密码、认证方式相邻，认证榜单同排，拖延与来源分栏；卡片统一固定高度，TOP 10 全部直接显示，不在卡片内滚动，手机单列，间距 12 像素。
+观测页依次展示统计概览、趋势、实时连接、历史来源和认证尝试；用户名、密码、认证方式相邻。榜单桌面两列、手机单列，同行卡片等高，全空时自动缩短；TOP 10 直接显示，不在卡片内滚动。
 
 普通认证、慢速横幅及并发慢速响应每次按 `Delay` 独立随机等待。`WZXJDSSH_DELAY_JITTER_PERCENT` 默认 `10`，范围 0–50；默认 10 秒基准对应 9–11 秒。仿真网络会话保持独立随机长短响应。超时与冷却截止按原配置计算。冷却重连中断以专用状态和关闭原因记录，不续期。
 
@@ -251,9 +258,9 @@ Web 管理会话默认闲置 1 小时自动退出，可在“管理设置”修�
 | `WZXJDSSH_IPDB_UPDATE_DAYS` | `45` | 1–365；按本地文件更新时间判断过期 |
 | `WZXJDSSH_IPDB_CACHE_SIZE` | `300` | 1–10000；缓存项数上限 |
 | `WZXJDSSH_IPDB_CACHE_TTL_SECONDS` | `300` | 1–86400；缓存闲置失效秒数 |
-| `WZXJDSSH_IPDB_CITY_URL` / `ASN_URL` / `GEOCN_URL` | PBH-BTN/GeoLite.mmdb | 分别下载三库；自定义时填写完整 HTTPS raw MMDB 或 gzip URL |
+| `WZXJDSSH_IPDB_CITY_URL` / `ASN_URL` / `GEOCN_URL` | City/ASN：PBH-BTN；GeoCN：ljxi/GeoCN 优先、PBH-BTN 备用 | 分别下载三库；自定义 HTTPS raw MMDB 或 gzip URL 覆盖对应默认回退链 |
 
-默认下载源为 [PBH-BTN/GeoLite.mmdb](https://github.com/PBH-BTN/GeoLite.mmdb/releases)，数据来自 MaxMind GeoLite2 与 ljxi/GeoCN。首次下载未完成时明确显示“归属数据库尚未就绪”，不阻塞 SSH；可离线将三库分别以 `GeoLite2-City.mmdb`、`GeoLite2-ASN.mmdb`、`GeoCN.mmdb` 放入 `ipdb/` 并关闭自动更新。
+City、ASN 从 [PBH-BTN/GeoLite.mmdb](https://github.com/PBH-BTN/GeoLite.mmdb/releases) 下载，数据来自 MaxMind GeoLite2；GeoCN 优先从 [ljxi/GeoCN](https://github.com/ljxi/GeoCN/releases) 上游下载，失败后尝试 PBH-BTN raw 和 Release 备用地址。首次下载未完成时明确显示“归属数据库尚未就绪”，不阻塞 SSH；可离线将三库分别以 `GeoLite2-City.mmdb`、`GeoLite2-ASN.mmdb`、`GeoCN.mmdb` 放入 `ipdb/` 并关闭自动更新。
 
 
 

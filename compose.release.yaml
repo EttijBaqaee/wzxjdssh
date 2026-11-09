@@ -1,6 +1,6 @@
 services:
   wzxjdssh:
-    image: ghcr.io/ettijbaqaee/wzxjdssh:2.3.0
+    image: ghcr.io/ettijbaqaee/wzxjdssh:2.3.1
     pull_policy: missing
     container_name: wzxjdssh
     restart: unless-stopped
@@ -57,6 +57,10 @@ services:
       WZXJDSSH_ADMIN_PASSWORD: "${WZXJDSSH_ADMIN_PASSWORD:?请在编排环境参数中设置至少12位管理员密码}"
       WZXJDSSH_WEB_BASE_PATH: "${WZXJDSSH_WEB_BASE_PATH:-}"
       WZXJDSSH_WEB_SECURE_COOKIE: "${WZXJDSSH_WEB_SECURE_COOKIE:-false}"
+      # 来访者 IP 双路校验；根路径跟随网页域名，不跟随 Web 路径前缀。
+      WZXJDSSH_VISITOR_IP_URL: "${WZXJDSSH_VISITOR_IP_URL:-/get-my-ip}"
+      # 只填写实际反代的 IP/CIDR；none 表示完全忽略转发头。
+      WZXJDSSH_TRUSTED_PROXIES: "${WZXJDSSH_TRUSTED_PROXIES:-127.0.0.1/32,::1/128}"
     volumes:
       - hostkeys:/data
       - records:/var/lib/wzxjdssh

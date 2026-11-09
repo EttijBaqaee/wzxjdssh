@@ -1,12 +1,12 @@
-# wzxjdssh 2.3.0： 编排使用文档
+# wzxjdssh 2.3.1： 编排使用文档
 
-配套文件：[compose.release.yaml](compose.release.yaml)。已发布镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.3.0`，支持 Linux amd64；另提供 `latest` 标签。当前配套编排默认传入 `SSH-2.0-OpenSSH_10.6p1`，可以通过编排环境参数修改。
+配套文件：[compose.release.yaml](compose.release.yaml)。已发布镜像为 `ghcr.io/ettijbaqaee/wzxjdssh:2.3.1`，支持 Linux amd64；另提供 `latest` 标签。当前配套编排默认传入 `SSH-2.0-OpenSSH_10.6p1`，可以通过编排环境参数修改。
 
 2.2.0 镜像、配置文件和配套编排的默认标识统一为 `SSH-2.0-OpenSSH_10.6p1`。已有编排若显式填写了旧标识，升级时需要移除该值以沿用新默认，或将其改为 `SSH-2.0-OpenSSH_10.6p1`。这里只修改横幅字符串，不改变底层 SSH 实现。
 
 创建编排、粘贴配套 YAML，首次部署会从 GHCR 拉取镜像。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
 
-离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.3.0`、`pull_policy` 改为 `never`。
+离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.3.1`、`pull_policy` 改为 `never`。
 
 ## 端口映射
 
@@ -43,6 +43,8 @@ WZXJDSSH_PORT=22
 | `WZXJDSSH_WEB_PORT` | `2223` | Web 宿主机端口，容器内固定 2223 |
 | `WZXJDSSH_WEB_BASE_PATH` | 空 | 前缀如 `/sshpanel`；支持字母、数字、`-`、`_` 组成的多级路径 |
 | `WZXJDSSH_WEB_SECURE_COOKIE` | `false` | HTTPS 访问时设置 `true` |
+| `WZXJDSSH_VISITOR_IP_URL` | `/get-my-ip` | 浏览器获取来访者 IP 的接口；支持同源根路径或完整 HTTP(S) URL |
+| `WZXJDSSH_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | 逗号分隔实际反代 IP/CIDR；支持 IPv4/IPv6，`none` 表示忽略所有转发头 |
 | `WZXJDSSH_RETENTION_DAYS` | `90` | 保留天数，范围 1–36500 |
 | `WZXJDSSH_DATABASE_MAX_MB` | `0`，不启用 | 主库及 WAL/SHM 合计容量的清理阈值，单位 MiB；1024 为 1 GiB，清理中可能暂时超出 |
 | `WZXJDSSH_MAX_AUTH_TRIES` | `0`，不限次数 | 单连接认证上限，慢速阶段不限总持续时间 |
@@ -154,6 +156,36 @@ location /sshpanel/ {
 
 登录限速按直接连接 Web 的来源地址计算：5 分钟内最多 10 次尝试。经过反代时可能共用同一限速桶；应用不信任外部传入的 IP 头。
 
+### 来访者 IP 与双路校验
+
+登录后，页头显示来访者 IP、地区、ASN 编号及组织名称，查询使用已有的本地 City + ASN + GeoCN 库和有限缓存。完整 IPv6 可以换行显示，IPv6 压缩/展开写法及 IPv4-mapped IPv6 会规范化后比较。
+
+第一路由浏览器请求 `WZXJDSSH_VISITOR_IP_URL`，默认 `/get-my-ip` 跟随当前网页域名的根路径，例如 `https://example.com/get-my-ip`，不拼到 `/sshpanel/` 下。接口可返回 `{"ip":"2001:db8::1"}` 或纯文本 IP，最多 4 KiB；第二路由后台读取 TCP 来源，只有直接来源属于 `WZXJDSSH_TRUSTED_PROXIES` 时才接受 `X-Forwarded-For` 或 `X-Real-IP`。多级代理从右向左跳过已配置的可信地址，取首个不可信来源。
+
+两路相同显示“双路一致”；不同时显示“两路 IP 不一致”，同时列出接口地址和后台观测地址，接口结果用于归属查询。双栈出口、VPN、CDN 或代理配置不同都可能造成差异，该比较不作为身份认证。接口超时、无效或不可用时使用后台地址并标明单路识别，不阻塞统计页面；登录后和页面重新可见时查询，可见期间每 5 分钟更新。查询不延长管理闲置会话，不写入 SSH 连接数据库。
+
+Nginx 可以在同一站点提供第一路接口：
+
+```nginx
+location = /get-my-ip {
+    default_type application/json;
+    add_header Cache-Control "no-store" always;
+    return 200 '{"ip":"$remote_addr"}';
+}
+```
+
+原网页反代中保留 `proxy_set_header X-Real-IP $remote_addr;`；使用多级代理时可加 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`，并在编排中填写实际代理的 IP/CIDR。host 模式下本机 Nginx 通常使用默认回环地址；Docker 网桥反代需要显式填写应用实际看到的代理地址。不要为方便而信任所有公网来源。CDN 后的 `$remote_addr` 需先由 Nginx 的可信 real-ip 配置正确还原。
+
+自定义接口示例：
+
+```yaml
+environment:
+  WZXJDSSH_VISITOR_IP_URL: "/get-my-ip"
+  WZXJDSSH_TRUSTED_PROXIES: "127.0.0.1/32,::1/128"
+```
+
+填写外域完整 URL 时，接口需要允许当前站点 CORS，HTTPS 网页须使用 HTTPS 接口。浏览器不会向外域接口发送管理员 Cookie；接口应直接返回 IP，不依赖重定向。只允许配置的接口源加入页面连接策略，不放宽脚本来源。默认回环信任仅用于来访者显示，既有登录限速仍按直接连接来源计算。
+
 ### SSH 版本标识
 
 在 1Panel 编排环境参数区填写：
@@ -186,7 +218,7 @@ environment:
 
 | 字段 | 当前值 | 用途 |
 | --- | --- | --- |
-| image | ghcr.io/ettijbaqaee/wzxjdssh:2.3.0 | 固定 GHCR 镜像版本 |
+| image | ghcr.io/ettijbaqaee/wzxjdssh:2.3.1 | 固定 GHCR 镜像版本 |
 | pull_policy | missing | 本地没有镜像时从 GHCR 拉取 |
 | container_name | wzxjdssh | 固定容器名；同一宿主机部署多份时需分别命名或移除此字段 |
 | restart | unless-stopped | 自动恢复容器；手动停止后保持停止 |
@@ -218,9 +250,9 @@ environment:
 
 若改用宿主机目录挂载 `/data`，该目录需允许容器 UID/GID `65532:65532` 读写。命名卷由 Docker 使用镜像内目录的属主和权限初始化。
 
-升级 2.3.0：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
+升级 2.3.1：在 1Panel 拉取新版本镜像，修改原编排标签并重新创建容器，保留原密钥和数据库卷。
 
-2.2.0 升级至 2.3.0 无需新增编排参数，SQLite 结构版本仍为 4；首次启动自动补齐收发汇总。总发送 / 总接收随历史删除、容量清理和清库同步变化。趋势图支持悬停、触屏和键盘查看实际数值。本版采用 AGPLv3，见 [LICENSE](LICENSE)。
+2.3.0 升级至 2.3.1，SQLite 结构版本仍为 4，无需变更数据卷或 SSH 参数。来访者显示的两个参数见上方表格；默认接口为 `/get-my-ip`，默认仅信任回环反代。从 2.2.0 升级时首次启动自动补齐收发汇总。总发送 / 总接收随历史删除、容量清理和清库同步变化。趋势图支持悬停、触屏和键盘查看实际数值。本版采用 AGPLv3，见 [LICENSE](LICENSE)。
 
 ## 自定义配置
 
@@ -308,11 +340,11 @@ volumes:
 | `WZXJDSSH_IPDB_UPDATE_DAYS` | `45` | 1–365；按本地文件更新时间判断过期 |
 | `WZXJDSSH_IPDB_CACHE_SIZE` | `300` | 1–10000；缓存项数上限 |
 | `WZXJDSSH_IPDB_CACHE_TTL_SECONDS` | `300` | 1–86400；缓存闲置失效秒数 |
-| `WZXJDSSH_IPDB_CITY_URL` / `ASN_URL` / `GEOCN_URL` | PBH-BTN/GeoLite.mmdb | 分别下载三库；自定义时填写完整 HTTPS raw MMDB 或 gzip URL |
+| `WZXJDSSH_IPDB_CITY_URL` / `ASN_URL` / `GEOCN_URL` | City/ASN：PBH-BTN；GeoCN：ljxi/GeoCN 优先、PBH-BTN 备用 | 分别下载三库；自定义时填写完整 HTTPS raw MMDB 或 gzip URL，自定义值覆盖对应默认回退链 |
 
-默认下载源为 [PBH-BTN/GeoLite.mmdb](https://github.com/PBH-BTN/GeoLite.mmdb/releases)，数据来自 MaxMind GeoLite2 与 ljxi/GeoCN。首次下载未完成时明确显示“归属数据库尚未就绪”，不阻塞 SSH；可离线将三库分别以 `GeoLite2-City.mmdb`、`GeoLite2-ASN.mmdb`、`GeoCN.mmdb` 放入 `ipdb/` 并关闭自动更新。
+City、ASN 从 [PBH-BTN/GeoLite.mmdb](https://github.com/PBH-BTN/GeoLite.mmdb/releases) 下载；GeoCN 优先从 [ljxi/GeoCN](https://github.com/ljxi/GeoCN/releases) 上游下载，失败后依次回退 PBH-BTN raw 和 Release 地址。首次下载未完成时明确显示“归属数据库尚未就绪”，不阻塞 SSH；可离线将三库分别以 `GeoLite2-City.mmdb`、`GeoLite2-ASN.mmdb`、`GeoCN.mmdb` 放入 `ipdb/` 并关闭自动更新。
 
-已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.3.0` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。
+已有编排只需将镜像改为 `ghcr.io/ettijbaqaee/wzxjdssh:2.3.1` 并保留原数据挂载；新参数可省略，默认值生效。host 模式、SSH 22、Web 2223、`/wzxjdssh/` 路径均沿用原配置。IP 库位于现有 records 挂载内，不受 SQLite 容量上限或清库按钮影响，需另预留约 70 MiB 及更新临时空间。
 
 ### 2.0.6 仿真响应核验
 

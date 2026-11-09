@@ -9,7 +9,8 @@
   identity.textContent=t('你的 IP：')+(data.ip||'—')+' · '+geoSummary(geo)+' · '+asn;
   const mismatch=data.verification==='mismatch';
   check.className='visitor-check'+(mismatch?' visitor-warning':'');
-  check.textContent=pending?t('正在双路校验…'):data.verification==='match'?t('双路一致'):mismatch?t('两路 IP 不一致'):failed?t('单路识别 · 访问者接口不可用'):t('单路识别');
+  check.hidden=!pending&&data.verification==='match';
+  check.textContent=pending?t('正在双路校验…'):data.verification==='match'?'':mismatch?t('两路 IP 不一致'):failed?t('单路识别 · 访问者接口不可用'):t('单路识别');
   comparison.hidden=!mismatch;
   const source={socket:t('直接连接'),forwarded:t('可信反代'),real_ip:t('可信反代'),unavailable:t('不可用')}[data.server_source]||t('不可用');
   comparison.textContent=mismatch?t('访问者接口：')+data.endpoint_ip+' · '+source+'：'+(data.server_ip||'—'):'';

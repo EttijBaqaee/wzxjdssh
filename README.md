@@ -93,6 +93,8 @@
 | `WZXJDSSH_ADMIN_PASSWORD` | 必填 | 管理员密码，至少 12 字节 |
 | `WZXJDSSH_WEB_BASE_PATH` | 空，使用 `/` | 路径前缀，例如 `/sshpanel` |
 | `WZXJDSSH_WEB_SECURE_COOKIE` | `false` | 通过 HTTPS 访问时设置 `true` |
+| `WZXJDSSH_VISITOR_IP_URL` | `/get-my-ip` | 来访者 IP 接口路径或完整 HTTP(S) URL；独立于管理页面路径，修改时同步调整 Nginx，见[配置示例](COMPOSE.zh-CN.md#修改来访者-ip-接口路径) |
+| `WZXJDSSH_TRUSTED_PROXIES` | `127.0.0.1/32,::1/128` | 读取来访者转发头时信任的反代 IP/CIDR；`none` 忽略转发头 |
 | `WZXJDSSH_RETENTION_DAYS` | `90` | 历史记录保留天数，范围 1–36500 |
 | `WZXJDSSH_DATABASE_MAX_MB` | `0`，不启用 | 数据库主文件、WAL、SHM 合计容量，单位 MiB；`1024` 为 1 GiB |
 | `WZXJDSSH_MAX_AUTH_TRIES` | `0` | 单连接认证次数上限；0 不限次数，范围 0–1000000 |

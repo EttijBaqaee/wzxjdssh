@@ -6,6 +6,8 @@
 
 创建编排、粘贴配套 YAML，首次部署会从 GHCR 拉取镜像。在编排的环境参数区至少设置 `WZXJDSSH_ADMIN_PASSWORD`，密码长度至少 12 字节。不要将实际密码提交到 Git。
 
+来访者 IP 接口默认 `/get-my-ip`，可用 `WZXJDSSH_VISITOR_IP_URL` 修改，见[修改接口路径的编排与 Nginx 示例](#修改来访者-ip-接口路径)。
+
 离线环境可下载 GitHub Release 中的镜像归档，在 1Panel 导入，再将 `image` 改为 `wzxjdssh:2.3.1`、`pull_policy` 改为 `never`。
 
 ## 端口映射
@@ -176,13 +178,41 @@ location = /get-my-ip {
 
 原网页反代中保留 `proxy_set_header X-Real-IP $remote_addr;`；使用多级代理时可加 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`，并在编排中填写实际代理的 IP/CIDR。host 模式下本机 Nginx 通常使用默认回环地址；Docker 网桥反代需要显式填写应用实际看到的代理地址。不要为方便而信任所有公网来源。CDN 后的 `$remote_addr` 需先由 Nginx 的可信 real-ip 配置正确还原。
 
-自定义接口示例：
+### 修改来访者 IP 接口路径
+
+参数名为 **`WZXJDSSH_VISITOR_IP_URL`**，默认值为 **`/get-my-ip`**，未填写或留空时使用默认值。它独立于 `WZXJDSSH_WEB_BASE_PATH`：即使管理页面在 `/wzxjdssh/`，默认请求仍是网站根目录下的 `/get-my-ip`。
+
+使用配套 `compose.release.yaml` 时，在 1Panel **编排的环境参数 / .env** 编辑区填写，例如将接口改成 `/visitor-ip`：
+
+```dotenv
+WZXJDSSH_VISITOR_IP_URL=/visitor-ip
+```
+
+配套编排已经包含对应的变量展开：
 
 ```yaml
 environment:
-  WZXJDSSH_VISITOR_IP_URL: "/get-my-ip"
-  WZXJDSSH_TRUSTED_PROXIES: "127.0.0.1/32,::1/128"
+  WZXJDSSH_VISITOR_IP_URL: "${WZXJDSSH_VISITOR_IP_URL:-/get-my-ip}"
 ```
+
+如果使用自己的编排，则在现有服务的 `environment:` 下加入或修改：
+
+```yaml
+environment:
+  WZXJDSSH_VISITOR_IP_URL: "/visitor-ip"
+```
+
+接口由 Nginx 或独立服务提供；这个参数只指定浏览器的请求地址，应用不会自动创建该接口。修改路径时，需要同步修改同一网站的 Nginx 配置：
+
+```nginx
+location = /visitor-ip {
+    default_type application/json;
+    add_header Cache-Control "no-store" always;
+    return 200 '{"ip":"$remote_addr"}';
+}
+```
+
+保存后，在 1Panel 更新编排并重建应用容器，使新环境参数生效，保留原数据卷；同时重新加载 Nginx 配置。此例中浏览器请求 `https://你的域名/visitor-ip`，不会自动追加管理页面路径。
 
 填写外域完整 URL 时，接口需要允许当前站点 CORS，HTTPS 网页须使用 HTTPS 接口。浏览器不会向外域接口发送管理员 Cookie；接口应直接返回 IP，不依赖重定向。只允许配置的接口源加入页面连接策略，不放宽脚本来源。默认回环信任仅用于来访者显示，既有登录限速仍按直接连接来源计算。
 

@@ -67,6 +67,8 @@ The server defaults to `SSH-2.0-OpenSSH_10.6p1`. Set `WZXJDSSH_SERVER_VERSION` t
 
 The Chinese [Compose and upgrade guide](COMPOSE.zh-CN.md) documents every environment setting, host networking, bind mounts and reverse-proxy examples. [Default configuration](configs/wzxjdssh.conf) lists the core policy values.
 
+To change `/get-my-ip`, set `WZXJDSSH_VISITOR_IP_URL=/visitor-ip` in the 1Panel Compose environment editor or `.env` when using the supplied Compose file. In a custom Compose file, set `WZXJDSSH_VISITOR_IP_URL: "/visitor-ip"` under the service's `environment:`. Configure the matching Nginx `location = /visitor-ip`, recreate the application container while keeping its data volumes, and reload Nginx. This setting specifies the browser's endpoint; the application does not create the endpoint itself. Paths start at the website root and are independent of `WZXJDSSH_WEB_BASE_PATH`. See the [matching Compose and Nginx examples](COMPOSE.zh-CN.md#修改来访者-ip-接口路径).
+
 ## Ports, configuration and storage
 
 | Item | Default / behavior |
@@ -74,6 +76,8 @@ The Chinese [Compose and upgrade guide](COMPOSE.zh-CN.md) documents every enviro
 | SSH port | `2222` inside the container |
 | Web listener | `:2223`; the supplied Compose binds the published port to `127.0.0.1` |
 | Web base path | `/wzxjdssh/` in the supplied Compose |
+| Visitor IP endpoint | `WZXJDSSH_VISITOR_IP_URL=/get-my-ip`; configurable independently of the web base path |
+| Trusted visitor proxies | `WZXJDSSH_TRUSTED_PROXIES=127.0.0.1/32,::1/128`; set actual proxy IPs/CIDRs or `none` |
 | Authentication / banner delay | `10000` milliseconds; the first banner line also waits |
 | Delay jitter | `10%`, configurable from 0 to 50 |
 | Banner line length | 32 bytes including CRLF; range 3–255 |

@@ -154,3 +154,29 @@ Version 2.2.0 upgrades the SQLite schema to version 4 and maintains transactiona
 Copyright (c) 2026 EttijBaqaee.
 
 This project is licensed under the [GNU AGPLv3](LICENSE), version 3 only (`AGPL-3.0-only`). Third-party dependencies retain their own licenses; see [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
+
+## Disclaimer
+
+This project is intended for SSH honeypot deployment, security research and connection observation. Operators should use it only on systems and networks they own or are expressly authorized to operate, and must ensure that deployment, data collection and subsequent processing comply with applicable law and relevant agreements. The project grants no additional authorization to access other systems, use captured credentials or process other people's data.
+
+The project is provided "as is." To the extent permitted by applicable law, the authors and contributors provide no express or implied warranties, including merchantability, fitness for a particular purpose or non-infringement. They do not guarantee defect-free software, protection against every attack or any particular delay effect. A honeypot does not replace system updates, access controls or other security measures.
+
+Operators must assess and accept the risks of configuration, operation and maintenance, including resource exhaustion, service interruption, data loss, exposure of authentication information and effects on other services. To the maximum extent permitted by applicable law, the authors and contributors are not liable for losses arising from using, modifying, distributing or being unable to use the project. This does not exclude or limit liability that cannot lawfully be excluded or limited.
+
+Third-party code, data and services remain subject to their original licenses and terms. This project does not guarantee their availability, accuracy or security. Modified versions, derivative projects and third-party services are the responsibility of their providers and must not be represented as endorsed or warranted by the original authors.
+
+Use, modification, distribution and network provision of modified versions must comply with the applicable requirements of the [GNU AGPLv3](LICENSE), including preserving relevant notices, providing Corresponding Source and, where applicable, offering remote interacting users access to the modified version's Corresponding Source. This statement adds no restrictions beyond the license and does not reduce the rights it grants. The license and applicable law govern licensing, warranty and liability.
+
+## Privacy notice
+
+The project includes no telemetry, behavioral analytics or centralized reporting to the authors. It does not automatically upload SSH connection records, attempted usernames, passwords, public keys or database contents to the authors or third parties. Administrators view records through their own instance's management API, which sends that data to the administrator's browser. Operators are responsible for securing the management endpoint and its transport.
+
+Connection information and authentication content submitted by clients are stored in a local SQLite database and persistent directories controlled by the operator. Passwords and interactive answers are recorded as submitted; built-in database encryption is not provided. Public-key records do not contain client private keys. Operators must manage access, retention, backups and deletion, and lawfully handle any personal or sensitive information involved. Deleting records does not securely erase disks, backups or snapshots.
+
+The current version makes the following outbound requests:
+
+- **Release checks:** the server queries the official GitHub API for the latest release. Request headers include the project name and current version, without connection records or authentication content.
+- **IP database downloads and updates:** when the relevant functions are enabled, the server accesses the default GitHub-hosted database sources or operator-configured download URLs. Attribution lookups run locally and do not submit individual queried IP addresses to the download sites.
+- **Visitor IP lookup:** the management page requests the operator-configured endpoint from the browser, defaulting to the same-origin `/get-my-ip` path. Cross-origin endpoints receive no administrator session cookie from this project. The endpoint can observe the browser's public egress IP and ordinary HTTP request information.
+
+Recipients of these requests can still observe the requester's public egress IP, request time and necessary request metadata. Custom endpoints, reverse proxies, hosting platforms and other third-party services apply their own logging and privacy rules. The management page uses a session cookie for sign-in and browser-local storage for preferences such as language and theme, not cross-site tracking. This notice describes the default behavior of the current repository code; modified versions and third-party deployments may differ.
